@@ -1,6 +1,13 @@
 import React, { useMemo, useState } from "react";
 
-type UserRole = "buyer" | "seller";
+type UserRole = "buyer" | "seller" | "admin";
+
+type DemoAccount = {
+  username: string;
+  password: string;
+  role: UserRole;
+  displayName: string;
+};
 
 type OfferStatus =
   | "draft"
@@ -25,7 +32,7 @@ type PurchaseRequest = {
 
 type NegotiationMessage = {
   id: string;
-  sender: UserRole;
+  sender: "buyer" | "seller";
   message: string;
   createdAt: string;
 };
@@ -74,6 +81,27 @@ type Order = {
   createdAt: string;
   fulfillment: SellerFulfillment;
 };
+
+const demoAccounts: DemoAccount[] = [
+  {
+    username: "buyer_demo01",
+    password: "1111",
+    role: "buyer",
+    displayName: "ผู้ซื้อ Demo 01",
+  },
+  {
+    username: "seller_demo01",
+    password: "1111",
+    role: "seller",
+    displayName: "ผู้ขาย Demo 01",
+  },
+  {
+    username: "admin_demo01",
+    password: "1111",
+    role: "admin",
+    displayName: "ผู้ดูแลระบบ Demo 01",
+  },
+];
 
 const lockedActionCardMessage =
   "ผู้ขายต้องตอบตกลงตามราคาที่ผู้ซื้อเสนอก่อน จึงจะกรอกข้อมูลการเตรียมสินค้า ขนส่ง เอกสาร และวันส่งมอบได้";
@@ -162,7 +190,12 @@ function canBuyerCreatePoSo(offer: Offer): boolean {
 }
 
 function App() {
-  const [currentRole, setCurrentRole] = useState<UserRole>("seller");
+  const [loggedInAccount, setLoggedInAccount] = useState<DemoAccount | null>(null);
+  const [loginUsername, setLoginUsername] = useState("buyer_demo01");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+
+  const currentRole: UserRole = loggedInAccount?.role || "buyer";
 
   const [purchaseRequest] = useState<PurchaseRequest>({
     id: "PR-2026-0001",
@@ -244,7 +277,32 @@ function App() {
     return calculateTotalAmountLabel(offer.quantity, requestedPrice);
   }, [offer.quantity, requestedPrice]);
 
-  function appendMessage(sender: UserRole, message: string) {
+  function handleLogin(event?: React.FormEvent) {
+    event?.preventDefault();
+
+    const username = loginUsername.trim();
+    const password = loginPassword.trim();
+
+    const foundAccount = demoAccounts.find(
+      (account) => account.username === username && account.password === password
+    );
+
+    if (!foundAccount) {
+      setLoginError("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");
+      return;
+    }
+
+    setLoggedInAccount(foundAccount);
+    setLoginError("");
+  }
+
+  function handleLogout() {
+    setLoggedInAccount(null);
+    setLoginPassword("");
+    setLoginError("");
+  }
+
+  function appendMessage(sender: "buyer" | "seller", message: string) {
     const now = new Date();
     const createdAt = now.toLocaleTimeString("th-TH", {
       hour: "2-digit",
@@ -266,7 +324,12 @@ function App() {
     const trimmed = chatInput.trim();
     if (!trimmed) return;
 
-    appendMessage(currentRole, trimmed);
+    if (currentRole === "admin") {
+      appendMessage("buyer", `[ผู้ดูแลระบบ] ${trimmed}`);
+    } else {
+      appendMessage(currentRole, trimmed);
+    }
+
     setChatInput("");
   }
 
@@ -320,7 +383,11 @@ function App() {
       status: "rejected",
     }));
 
-    appendMessage(currentRole, "ปฏิเสธข้อเสนอนี้");
+    if (currentRole === "seller") {
+      appendMessage("seller", "ปฏิเสธข้อเสนอนี้");
+    } else {
+      appendMessage("buyer", "ปฏิเสธข้อเสนอนี้");
+    }
   }
 
   function handleFulfillmentChange(field: keyof SellerFulfillment, value: string) {
@@ -356,6 +423,82 @@ function App() {
     setIsPoSoModalOpen(true);
   }
 
+  if (!loggedInAccount) {
+    return (
+      <main style={styles.loginPage}>
+        <form onSubmit={handleLogin} style={styles.loginCard}>
+          <div style={styles.loginHeader}>
+            <div>
+              <h1 style={styles.loginTitle}>เข้าสู่ระบบสมาชิก</h1>
+              <p style={styles.loginSubtitle}>
+                กรอกชื่อผู้ใช้และรหัสผ่าน ระบบจะตรวจสอบบทบาทของบัญชีและพาไปยังหน้าผู้ซื้อ ผู้ขาย หรือผู้ดูแลระบบโดยอัตโนมัติ
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setLoginUsername("");
+                setLoginPassword("");
+                setLoginError("");
+              }}
+              style={styles.closeLoginButton}
+            >
+              ปิด
+            </button>
+          </div>
+
+          <label style={styles.loginField}>
+            <span style={styles.label}>ชื่อผู้ใช้</span>
+            <input
+              value={loginUsername}
+              onChange={(event) => setLoginUsername(event.target.value)}
+              style={styles.input}
+              placeholder="buyer_demo01"
+              autoComplete="username"
+            />
+          </label>
+
+          <label style={styles.loginField}>
+            <span style={styles.label}>รหัสผ่าน</span>
+            <input
+              value={loginPassword}
+              onChange={(event) => setLoginPassword(event.target.value)}
+              style={styles.input}
+              placeholder="1111"
+              type="password"
+              autoComplete="current-password"
+            />
+          </label>
+
+          {loginError && <div style={styles.loginError}>{loginError}</div>}
+
+          <button type="submit" style={styles.loginButton}>
+            เข้าสู่ระบบ
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setLoginUsername("buyer_demo01");
+              setLoginPassword("1111");
+              setLoginError("");
+            }}
+            style={styles.outlineButton}
+          >
+            ใส่รหัส buyer_demo01 / 1111
+          </button>
+
+          <div style={styles.demoAccountBox}>
+            <strong>บัญชีทดสอบ</strong>
+            <p>buyer_demo01 / 1111</p>
+            <p>seller_demo01 / 1111</p>
+            <p>admin_demo01 / 1111</p>
+          </div>
+        </form>
+      </main>
+    );
+  }
+
   return (
     <main style={styles.page}>
       <section style={styles.header}>
@@ -367,26 +510,18 @@ function App() {
           </p>
         </div>
 
-        <div style={styles.roleSwitch}>
-          <button
-            type="button"
-            onClick={() => setCurrentRole("buyer")}
-            style={{
-              ...styles.roleButton,
-              ...(currentRole === "buyer" ? styles.roleButtonActive : {}),
-            }}
-          >
-            ผู้ซื้อ
-          </button>
-          <button
-            type="button"
-            onClick={() => setCurrentRole("seller")}
-            style={{
-              ...styles.roleButton,
-              ...(currentRole === "seller" ? styles.roleButtonActive : {}),
-            }}
-          >
-            ผู้ขาย
+        <div style={styles.accountBox}>
+          <strong>{loggedInAccount.displayName}</strong>
+          <span>
+            บทบาท:{" "}
+            {loggedInAccount.role === "buyer"
+              ? "ผู้ซื้อ"
+              : loggedInAccount.role === "seller"
+                ? "ผู้ขาย"
+                : "ผู้ดูแลระบบ"}
+          </span>
+          <button type="button" onClick={handleLogout} style={styles.logoutButton}>
+            ออกจากระบบ
           </button>
         </div>
       </section>
@@ -462,7 +597,12 @@ function App() {
               <h2 style={styles.cardTitle}>ราคาและเงื่อนไขต้องตกลงกันในแชทก่อน</h2>
             </div>
             <span style={styles.badge}>
-              โหมด: {currentRole === "buyer" ? "ผู้ซื้อ" : "ผู้ขาย"}
+              โหมด:{" "}
+              {currentRole === "buyer"
+                ? "ผู้ซื้อ"
+                : currentRole === "seller"
+                  ? "ผู้ขาย"
+                  : "ผู้ดูแลระบบ"}
             </span>
           </div>
 
@@ -540,7 +680,10 @@ function App() {
                   type="button"
                   onClick={handleSellerCounterOffer}
                   disabled={currentRole !== "seller"}
-                  style={styles.secondaryButton}
+                  style={{
+                    ...styles.secondaryButton,
+                    ...(currentRole !== "seller" ? styles.disabledButton : {}),
+                  }}
                 >
                   เสนอราคาใหม่
                 </button>
@@ -781,6 +924,98 @@ function FormField({
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  loginPage: {
+    minHeight: "100vh",
+    display: "grid",
+    placeItems: "center",
+    background: "#f6f7fb",
+    color: "#172033",
+    padding: 20,
+    fontFamily:
+      'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  },
+  loginCard: {
+    width: "min(540px, 100%)",
+    background: "#ffffff",
+    borderRadius: 20,
+    padding: 28,
+    boxShadow: "0 20px 60px rgba(15, 23, 42, 0.12)",
+    border: "1px solid rgba(148, 163, 184, 0.24)",
+  },
+  loginHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 16,
+    marginBottom: 20,
+  },
+  loginTitle: {
+    margin: "0 0 8px",
+    fontSize: 30,
+    lineHeight: 1.2,
+  },
+  loginSubtitle: {
+    margin: 0,
+    color: "#64748b",
+    fontSize: 15,
+    lineHeight: 1.6,
+  },
+  closeLoginButton: {
+    border: 0,
+    background: "transparent",
+    color: "#94a3b8",
+    fontWeight: 800,
+    cursor: "pointer",
+    fontSize: 16,
+  },
+  loginField: {
+    display: "grid",
+    gap: 8,
+    marginBottom: 16,
+  },
+  loginButton: {
+    width: "100%",
+    border: 0,
+    borderRadius: 10,
+    padding: "14px 16px",
+    background: "#07855f",
+    color: "#ffffff",
+    fontWeight: 900,
+    cursor: "pointer",
+    fontSize: 16,
+    marginTop: 10,
+  },
+  outlineButton: {
+    width: "100%",
+    border: "1px solid #cbd5e1",
+    borderRadius: 10,
+    padding: "12px 16px",
+    background: "#ffffff",
+    color: "#334155",
+    fontWeight: 800,
+    cursor: "pointer",
+    fontSize: 15,
+    marginTop: 10,
+  },
+  loginError: {
+    background: "#fee2e2",
+    color: "#991b1b",
+    border: "1px solid #fecaca",
+    borderRadius: 12,
+    padding: "10px 12px",
+    fontWeight: 800,
+    marginTop: 4,
+  },
+  demoAccountBox: {
+    marginTop: 16,
+    padding: 14,
+    borderRadius: 14,
+    background: "#f8fafc",
+    border: "1px solid #e2e8f0",
+    color: "#475569",
+    fontSize: 14,
+    lineHeight: 1.4,
+  },
   page: {
     minHeight: "100vh",
     background: "#f6f7fb",
@@ -821,26 +1056,26 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
     lineHeight: 1.5,
   },
-  roleSwitch: {
-    display: "flex",
-    background: "#ffffff",
-    padding: 6,
-    borderRadius: 14,
-    boxShadow: "0 8px 24px rgba(15, 23, 42, 0.08)",
+  accountBox: {
+    display: "grid",
     gap: 6,
+    background: "#ffffff",
+    borderRadius: 16,
+    padding: 14,
+    minWidth: 210,
+    boxShadow: "0 8px 24px rgba(15, 23, 42, 0.08)",
+    color: "#334155",
+    fontSize: 14,
   },
-  roleButton: {
+  logoutButton: {
     border: 0,
     borderRadius: 10,
-    padding: "10px 16px",
-    background: "transparent",
+    padding: "8px 12px",
+    background: "#fee2e2",
+    color: "#991b1b",
+    fontWeight: 800,
     cursor: "pointer",
-    fontWeight: 700,
-    color: "#475569",
-  },
-  roleButtonActive: {
-    background: "#172033",
-    color: "#ffffff",
+    marginTop: 4,
   },
   grid: {
     display: "grid",
