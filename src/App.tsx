@@ -3632,9 +3632,86 @@ function RoleContent({
     return fallbackStatus || "เปิดรับข้อเสนอ";
   };
 
+  const getChatThreadWorkflowStatus = (
+    thread: ChatThread,
+    relatedRequestOverride?: PurchaseRequest,
+    relatedOrderOverride?: Order
+  ) => {
+    const relatedRequest = relatedRequestOverride || requests.find((request) => request.id === thread.rfqId);
+    const relatedOrder =
+      relatedOrderOverride ||
+      orders.find((order) => order.id === thread.orderId || order.requestId === thread.rfqId);
+    const threadMessages = chatMessages.filter((message) => message.threadId === thread.id);
+    const sortedThreadMessages = [...threadMessages].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const newestFirstMessages = [...sortedThreadMessages].reverse();
+
+    const latestBuyerPriceNegotiationMessage = newestFirstMessages.find(
+      (message) =>
+        message.senderRole === "buyer" &&
+        message.messageType === "user_message" &&
+        isBuyerPriceNegotiationMessage(message.message)
+    );
+
+    const latestSellerFormalOfferAfterPriceNegotiation = latestBuyerPriceNegotiationMessage
+      ? newestFirstMessages.find(
+          (message) =>
+            message.senderRole === "seller" &&
+            message.messageType === "user_message" &&
+            message.createdAt > latestBuyerPriceNegotiationMessage.createdAt &&
+            message.message.includes("ผู้ขายส่งข้อเสนอขายอย่างเป็นทางการ") &&
+            Boolean(extractFormalOfferUnitPrice(message.message))
+        )
+      : undefined;
+
+    const latestBuyerAcceptedAfterLatestSellerOffer = latestSellerFormalOfferAfterPriceNegotiation
+      ? newestFirstMessages.find(
+          (message) =>
+            message.senderRole === "buyer" &&
+            message.messageType === "user_message" &&
+            message.createdAt > latestSellerFormalOfferAfterPriceNegotiation.createdAt &&
+            message.message.includes("ผู้ซื้อยืนยันข้อเสนอขายอย่างเป็นทางการ")
+        )
+      : undefined;
+
+    const latestPoSoAfterLatestSellerOffer = latestSellerFormalOfferAfterPriceNegotiation
+      ? newestFirstMessages.find(
+          (message) =>
+            message.messageType === "user_message" &&
+            message.createdAt > latestSellerFormalOfferAfterPriceNegotiation.createdAt &&
+            (message.message.includes("ผู้ขายยืนยันรับคำสั่งซื้อและระบบสร้าง PO / SO") ||
+              message.message.includes("PO ฝั่งผู้ซื้อ:") ||
+              message.message.includes("SO ฝั่งผู้ขาย:") ||
+              message.message.includes("ระบบสร้าง PO / SO แล้ว"))
+        )
+      : undefined;
+
+    if (latestBuyerPriceNegotiationMessage && !latestSellerFormalOfferAfterPriceNegotiation) {
+      return "รอผู้ขายยืนยันราคาใหม่";
+    }
+
+    if (
+      latestSellerFormalOfferAfterPriceNegotiation &&
+      !latestBuyerAcceptedAfterLatestSellerOffer &&
+      !latestPoSoAfterLatestSellerOffer
+    ) {
+      return "รอผู้ซื้อยืนยันราคาใหม่";
+    }
+
+    const steps = getWorkflowStepsForChat({
+      thread,
+      relatedRequest,
+      relatedOrder,
+      messages: threadMessages,
+    });
+
+    return getTransactionStatusFromWorkflow(steps, relatedOrder?.status || relatedRequest?.status);
+  };
+
   const getRequestStatusFromChat = (request: PurchaseRequest) => {
     const thread = chatThreads.find((item) => item.rfqId === request.id);
     const relatedOrder = orders.find((order) => order.requestId === request.id);
+
+    if (thread) return getChatThreadWorkflowStatus(thread, request, relatedOrder);
 
     if (!thread && !relatedOrder) return request.status;
 
@@ -3666,15 +3743,23 @@ function RoleContent({
     if (!thread) return order.status;
 
     const relatedRequest = requests.find((request) => request.id === order.requestId);
-    const threadMessages = chatMessages.filter((message) => message.threadId === thread.id);
-    const steps = getWorkflowStepsForChat({
-      thread,
-      relatedRequest,
-      relatedOrder: order,
-      messages: threadMessages,
-    });
+    return getChatThreadWorkflowStatus(thread, relatedRequest, order);
+  };
 
-    return getTransactionStatusFromWorkflow(steps, order.status);
+  const getOfferStatusFromChat = (offer: Offer) => {
+    const relatedRequest = requests.find((request) => request.id === offer.requestId);
+    const relatedOrder = orders.find(
+      (order) => order.salesOfferId === offer.id || order.requestId === offer.requestId
+    );
+    const thread = chatThreads.find(
+      (item) => item.rfqId === offer.requestId || Boolean(relatedOrder?.id && item.orderId === relatedOrder.id)
+    );
+
+    if (thread) return getChatThreadWorkflowStatus(thread, relatedRequest, relatedOrder);
+    if (relatedOrder) return getOrderStatusFromChat(relatedOrder);
+    if (relatedRequest) return getRequestStatusFromChat(relatedRequest);
+
+    return offer.status;
   };
 
   const extractTradeDocumentIdsFromChat = (thread: ChatThread) => {
@@ -3770,6 +3855,11 @@ function RoleContent({
   const myBuyerRequestsForHistory = myBuyerRequests.map((request) => ({
     ...request,
     status: getRequestStatusFromChat(request),
+  }));
+
+  const mySellerOffersForHistory = mySellerOffers.map((offer) => ({
+    ...offer,
+    status: getOfferStatusFromChat(offer),
   }));
 
   const myBuyerOrdersForHistory = mergeUniqueOrders(
@@ -3908,6 +3998,7 @@ function RoleContent({
             currentUser={currentUser}
             requests={requests}
             orders={orders}
+            getThreadStatus={getChatThreadWorkflowStatus}
             onOpen={setSelectedChatThread}
           />
 
@@ -3938,7 +4029,7 @@ function RoleContent({
       return (
         <>
           <OrdersTable
-            orders={myBuyerOrders}
+            orders={myBuyerOrdersForHistory}
             confirmDelivery={confirmDelivery}
             currentUser={currentUser}
             reviews={reviews}
@@ -4018,7 +4109,7 @@ function RoleContent({
         <div className="grid gap-4 md:grid-cols-3">
           <StatCard title="ห้องแชทการจัดซื้อ" value={myChatThreads.length} detail="ใช้เป็นศูนย์กลางการทำธุรกรรม" />
           <StatCard title="คำขอซื้อของฉัน" value={myBuyerRequests.length} />
-          <StatCard title="ดีล / คำสั่งซื้อ" value={myBuyerOrders.length} />
+          <StatCard title="ดีล / คำสั่งซื้อ" value={myBuyerOrdersForHistory.length} />
         </div>
 
         <ChatThreadList
@@ -4028,6 +4119,7 @@ function RoleContent({
           currentUser={currentUser}
           requests={requests}
           orders={orders}
+          getThreadStatus={getChatThreadWorkflowStatus}
           onOpen={setSelectedChatThread}
         />
 
@@ -4107,6 +4199,7 @@ function RoleContent({
             currentUser={currentUser}
             requests={requests}
             orders={orders}
+            getThreadStatus={getChatThreadWorkflowStatus}
             onOpen={setSelectedChatThread}
           />
 
@@ -4133,7 +4226,7 @@ function RoleContent({
       return (
         <>
           <SellerOffersTable
-            offers={mySellerOffers}
+            offers={mySellerOffersForHistory}
             requests={requests}
             onOpenChat={(request) => openRequestChat(request)}
           />
@@ -4160,7 +4253,7 @@ function RoleContent({
     if (activeMenu === "ดีล / คำสั่งซื้อของฉัน" || activeMenu === "คำสั่งซื้อของฉัน") {
       return (
         <>
-          <OrdersTable orders={mySellerOrders} onOpenChat={openOrderChat} />
+          <OrdersTable orders={mySellerOrdersForHistory} onOpenChat={openOrderChat} />
 
           {selectedChatThread ? (
             <ChatModal
@@ -4215,7 +4308,7 @@ function RoleContent({
     if (activeMenu === "ประวัติธุรกรรม") {
       return (
         <>
-          <SellerOffersTable offers={mySellerOffers} />
+          <SellerOffersTable offers={mySellerOffersForHistory} />
           <OrdersTable orders={mySellerOrdersForHistory} />
         </>
       );
@@ -4249,7 +4342,7 @@ function RoleContent({
         <div className="grid gap-4 md:grid-cols-4">
           <StatCard title="สินค้าของฉัน" value={mySellerProducts.length} detail="เฉพาะ sellerId ของฉัน" />
           <StatCard title="แชทจากผู้ซื้อ" value={myChatThreads.length} detail="ใช้เป็นศูนย์กลางการทำธุรกรรม" />
-          <StatCard title="ดีล / คำสั่งซื้อ" value={mySellerOrders.length} />
+          <StatCard title="ดีล / คำสั่งซื้อ" value={mySellerOrdersForHistory.length} />
           <StatCard title="คะแนนความน่าเชื่อถือ" value="86" detail={currentUser.verificationStatus || "รอตรวจสอบ"} />
         </div>
 
@@ -4260,6 +4353,7 @@ function RoleContent({
           currentUser={currentUser}
           requests={requests}
           orders={orders}
+          getThreadStatus={getChatThreadWorkflowStatus}
           onOpen={setSelectedChatThread}
         />
 
@@ -4373,6 +4467,7 @@ function RoleContent({
           currentUser={currentUser}
           requests={requests}
           orders={orders}
+          getThreadStatus={getChatThreadWorkflowStatus}
           onOpen={setSelectedChatThread}
           adminMode
         />
@@ -5695,6 +5790,7 @@ function ChatThreadList({
   requests,
   orders,
   onOpen,
+  getThreadStatus,
   adminMode,
 }: {
   title: string;
@@ -5704,6 +5800,7 @@ function ChatThreadList({
   requests: PurchaseRequest[];
   orders: Order[];
   onOpen: (thread: ChatThread) => void;
+  getThreadStatus?: (thread: ChatThread) => string;
   adminMode?: boolean;
 }) {
   return (
@@ -5736,6 +5833,7 @@ function ChatThreadList({
               relatedRequest?.productName ||
               relatedOrder?.productName ||
               (thread.threadType === "rfq" ? "คำขอซื้อ" : "คำสั่งซื้อ");
+            const threadWorkflowStatus = getThreadStatus?.(thread) || "เปิดแชท";
 
             return (
               <div key={thread.id} className="rounded-lg border border-[#DDE7E3] p-4">
@@ -5743,7 +5841,8 @@ function ChatThreadList({
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="font-bold text-[#0F172A]">{titleText}</p>
-                      <StatusBadge value={thread.status === "flagged" ? "แชทมีความเสี่ยง" : "เปิดแชท"} />
+                      <StatusBadge value={threadWorkflowStatus} />
+                      {thread.status === "flagged" ? <StatusBadge value="แชทมีความเสี่ยง" /> : null}
                       {unreadCount > 0 ? (
                         <span className="rounded-full bg-[#0F8A5F] px-2.5 py-1 text-xs font-bold text-white">
                           ยังไม่อ่าน {unreadCount}
