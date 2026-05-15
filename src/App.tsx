@@ -23,6 +23,16 @@ type RegistrationInput = {
   organizationType: string;
 };
 
+type AnnouncementTone = "info" | "promotion" | "warning";
+
+type PublicAnnouncement = {
+  isActive: boolean;
+  tone: AnnouncementTone;
+  badge: string;
+  message: string;
+  updatedAt?: string;
+};
+
 type ProductStatus = "draft" | "pending_review" | "active" | "rejected" | "suspended";
 type StockStatus = "available" | "limited" | "reserved" | "out_of_stock" | "harvesting_soon";
 type DeliveryAreaType = "same_district" | "same_province" | "nearby_province" | "nationwide" | "custom";
@@ -646,6 +656,7 @@ const initialChatMessages: ChatMessage[] = [
 const CHAT_THREADS_STORAGE_KEY = "farmlink_chat_threads";
 const CHAT_MESSAGES_STORAGE_KEY = "farmlink_chat_messages";
 const PRODUCTS_STORAGE_KEY = "farmlink_products";
+const PUBLIC_ANNOUNCEMENT_STORAGE_KEY = "farmlink_public_announcement";
 const REQUESTS_STORAGE_KEY = "farmlink_purchase_requests";
 const OFFERS_STORAGE_KEY = "farmlink_offers";
 const ORDERS_STORAGE_KEY = "farmlink_orders";
@@ -666,7 +677,33 @@ function loadStoredArray<T>(key: string, fallback: T[]): T[] {
   }
 }
 
+function loadStoredObject<T>(key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback;
+
+  try {
+    const storedValue = window.localStorage.getItem(key);
+    if (!storedValue) return fallback;
+
+    const parsedValue = JSON.parse(storedValue);
+    return parsedValue && typeof parsedValue === "object" && !Array.isArray(parsedValue)
+      ? ({ ...fallback, ...parsedValue } as T)
+      : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function saveStoredArray<T>(key: string, value: T[]) {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage failures in demo mode.
+  }
+}
+
+function saveStoredObject<T>(key: string, value: T) {
   if (typeof window === "undefined") return;
 
   try {
@@ -715,6 +752,13 @@ async function imageFileToStoredDataUrl(file: File) {
     image.src = originalDataUrl;
   });
 }
+
+const defaultPublicAnnouncement: PublicAnnouncement = {
+  isActive: true,
+  tone: "info",
+  badge: "ประกาศจาก FarmLink",
+  message: "ระบบจัดซื้อสินค้าเกษตร B2B ตรวจสอบได้ - ค้นหา เปรียบเทียบ และส่งคำขอซื้อจากผู้ผลิตโดยตรง",
+};
 
 const initialRisks: RiskAlert[] = [
   {
@@ -1836,6 +1880,9 @@ function App() {
   const [loginMode, setLoginMode] = useState<LoginMode | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("ทั้งหมด");
+  const [publicAnnouncement, setPublicAnnouncement] = useState<PublicAnnouncement>(() =>
+    loadStoredObject<PublicAnnouncement>(PUBLIC_ANNOUNCEMENT_STORAGE_KEY, defaultPublicAnnouncement)
+  );
 
   const [products, setProducts] = useState<PublicProduct[]>(() => loadStoredArray<PublicProduct>(PRODUCTS_STORAGE_KEY, initialProducts));
   const [requests, setRequests] = useState<PurchaseRequest[]>(() => loadStoredArray<PurchaseRequest>(REQUESTS_STORAGE_KEY, initialRequests));
@@ -1853,6 +1900,10 @@ function App() {
   useEffect(() => {
     saveStoredArray(PRODUCTS_STORAGE_KEY, products);
   }, [products]);
+
+  useEffect(() => {
+    saveStoredObject(PUBLIC_ANNOUNCEMENT_STORAGE_KEY, publicAnnouncement);
+  }, [publicAnnouncement]);
 
   useEffect(() => {
     saveStoredArray(CHAT_THREADS_STORAGE_KEY, chatThreads);
@@ -1884,6 +1935,7 @@ function App() {
 
   useEffect(() => {
     const reloadChatStateFromStorage = () => {
+      setPublicAnnouncement(loadStoredObject<PublicAnnouncement>(PUBLIC_ANNOUNCEMENT_STORAGE_KEY, defaultPublicAnnouncement));
       setProducts(loadStoredArray<PublicProduct>(PRODUCTS_STORAGE_KEY, initialProducts));
       setChatThreads(loadStoredArray<ChatThread>(CHAT_THREADS_STORAGE_KEY, initialChatThreads));
       setChatMessages(loadStoredArray<ChatMessage>(CHAT_MESSAGES_STORAGE_KEY, initialChatMessages));
@@ -1896,6 +1948,7 @@ function App() {
 
     const handleStorageSync = (event: StorageEvent) => {
       if (
+        event.key === PUBLIC_ANNOUNCEMENT_STORAGE_KEY ||
         event.key === PRODUCTS_STORAGE_KEY ||
         event.key === CHAT_THREADS_STORAGE_KEY ||
         event.key === CHAT_MESSAGES_STORAGE_KEY ||
@@ -1968,6 +2021,19 @@ function App() {
       },
       ...current,
     ]);
+  };
+
+  const updatePublicAnnouncement = (nextAnnouncement: PublicAnnouncement) => {
+    const updatedAnnouncement: PublicAnnouncement = {
+      ...nextAnnouncement,
+      badge: nextAnnouncement.badge.trim() || "ประกาศจาก FarmLink",
+      message: nextAnnouncement.message.trim() || defaultPublicAnnouncement.message,
+      updatedAt: new Date().toISOString(),
+    };
+
+    setPublicAnnouncement(updatedAnnouncement);
+    addAudit("แก้ไขประกาศหน้าแรก", updatedAnnouncement.badge, "ผู้ดูแลระบบ");
+    setToast("อัปเดตประกาศหน้าแรกแล้ว");
   };
 
   const normalizeLoginUsername = (value?: string) =>
@@ -2911,6 +2977,7 @@ function App() {
     return (
       <PublicCatalog
         products={filteredPublicProducts}
+        announcement={publicAnnouncement}
         searchTerm={searchTerm}
         categoryFilter={categoryFilter}
         loginMode={loginMode}
@@ -3039,6 +3106,7 @@ function App() {
             currentUser={currentUser}
             role={role}
             activeMenu={activeMenu}
+            publicAnnouncement={publicAnnouncement}
             products={products}
             requests={requests}
             offers={offers}
@@ -3067,6 +3135,7 @@ function App() {
             editSellerProduct={editSellerProduct}
             updateSellerProductImage={updateSellerProductImage}
             deleteSellerProduct={deleteSellerProduct}
+            onUpdatePublicAnnouncement={updatePublicAnnouncement}
           />
         </main>
       </div>
@@ -3076,6 +3145,7 @@ function App() {
 
 function PublicCatalog({
   products,
+  announcement,
   searchTerm,
   categoryFilter,
   loginMode,
@@ -3086,6 +3156,7 @@ function PublicCatalog({
   onRegister,
 }: {
   products: PublicProduct[];
+  announcement: PublicAnnouncement;
   searchTerm: string;
   categoryFilter: string;
   loginMode: LoginMode | null;
@@ -3148,6 +3219,12 @@ function PublicCatalog({
     { label: "ธัญพืช", icon: "▧" },
   ];
 
+  const announcementToneClass: Record<AnnouncementTone, string> = {
+    info: "border-[#DDE7E3] bg-white text-[#254236]",
+    promotion: "border-emerald-200 bg-emerald-50 text-[#064E3B]",
+    warning: "border-amber-200 bg-amber-50 text-amber-900",
+  };
+
   return (
     <main className="min-h-screen bg-[#FAFBF8] text-slate-900">
       <header className="sticky top-0 z-20 border-b border-[#E4EDE7] bg-white/95 backdrop-blur">
@@ -3180,11 +3257,14 @@ function PublicCatalog({
       </header>
 
       <section className="mx-auto max-w-7xl px-5 pb-10 pt-6">
-        <div className="mx-auto max-w-4xl text-center">
-          <p className="text-lg font-medium leading-relaxed text-[#4B6B5C]">
-            ระบบจัดซื้อสินค้าเกษตร B2B ตรวจสอบได้ — ค้นหา เปรียบเทียบ และส่งคำขอซื้อจากผู้ผลิตโดยตรง
-          </p>
-        </div>
+        {announcement.isActive ? (
+          <div className={`mx-auto max-w-4xl rounded-2xl border px-5 py-4 text-center shadow-sm ${announcementToneClass[announcement.tone]}`}>
+            <span className="inline-flex rounded-full bg-white/80 px-3 py-1 text-xs font-bold text-[#2B7554] shadow-sm">
+              {announcement.badge}
+            </span>
+            <p className="mt-3 text-lg font-medium leading-relaxed">{announcement.message}</p>
+          </div>
+        ) : null}
 
         <div className="mx-auto mt-10 max-w-6xl">
           <label className="relative block">
@@ -3682,6 +3762,7 @@ function RoleContent({
   currentUser,
   role,
   activeMenu,
+  publicAnnouncement,
   products,
   requests,
   offers,
@@ -3710,10 +3791,12 @@ function RoleContent({
   editSellerProduct,
   updateSellerProductImage,
   deleteSellerProduct,
+  onUpdatePublicAnnouncement,
 }: {
   currentUser: User;
   role: Role;
   activeMenu: string;
+  publicAnnouncement: PublicAnnouncement;
   products: PublicProduct[];
   requests: PurchaseRequest[];
   offers: Offer[];
@@ -3745,6 +3828,7 @@ function RoleContent({
   editSellerProduct: (productId: string, form: ProductFormState) => void;
   updateSellerProductImage: (productId: string, imageUrl?: string) => void;
   deleteSellerProduct: (productId: string) => void;
+  onUpdatePublicAnnouncement: (announcement: PublicAnnouncement) => void;
 }) {
   const myBuyerRequests = requests.filter((item) => item.buyerId === currentUser.id);
   const myBuyerOffers = offers.filter((item) => item.buyerId === currentUser.id);
@@ -4582,6 +4666,11 @@ function RoleContent({
         <UserProfile currentUser={currentUser} />
       </SectionCard>
 
+      <AdminAnnouncementSettings
+        announcement={publicAnnouncement}
+        onSave={onUpdatePublicAnnouncement}
+      />
+
       <div className="grid gap-4 md:grid-cols-4">
         <StatCard title="สินค้าในระบบ" value={products.length} />
         <StatCard title="คำขอซื้อทั้งหมด" value={requests.length} />
@@ -4592,6 +4681,104 @@ function RoleContent({
       <RiskTable risks={risks} />
       <AuditTable auditLogs={auditLogs.slice(0, 5)} />
     </>
+  );
+}
+
+function AdminAnnouncementSettings({
+  announcement,
+  onSave,
+}: {
+  announcement: PublicAnnouncement;
+  onSave: (announcement: PublicAnnouncement) => void;
+}) {
+  const [form, setForm] = useState<PublicAnnouncement>(announcement);
+
+  useEffect(() => {
+    setForm(announcement);
+  }, [announcement]);
+
+  const update = <K extends keyof PublicAnnouncement>(key: K, value: PublicAnnouncement[K]) => {
+    setForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const toneOptions: { value: AnnouncementTone; label: string; description: string }[] = [
+    { value: "info", label: "ประกาศทั่วไป", description: "ข้อความแนะนำระบบหรือข่าวทั่วไป" },
+    { value: "promotion", label: "โปรโมชัน", description: "ช่วงผลผลิตเด่น ราคาแนะนำ หรือแคมเปญ" },
+    { value: "warning", label: "แจ้งเตือน", description: "ข้อความเตือนความเสี่ยงหรือข้อควรทราบ" },
+  ];
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onSave(form);
+  };
+
+  return (
+    <SectionCard title="ประกาศหน้าแรก">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <label className="flex items-center gap-3 rounded-lg border border-[#DDE7E3] bg-[#F8FBF9] px-4 py-3 text-sm font-medium text-slate-700">
+          <input
+            type="checkbox"
+            checked={form.isActive}
+            onChange={(event) => update("isActive", event.target.checked)}
+            className="h-4 w-4 rounded border-slate-300 text-[#0F8A5F]"
+          />
+          แสดงประกาศนี้บนหน้าแรก
+        </label>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          {toneOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => update("tone", option.value)}
+              className={`rounded-lg border p-4 text-left transition ${
+                form.tone === option.value
+                  ? "border-[#2B7554] bg-emerald-50 text-[#064E3B]"
+                  : "border-[#DDE7E3] bg-white text-slate-700 hover:border-[#2B7554]"
+              }`}
+            >
+              <p className="text-sm font-bold">{option.label}</p>
+              <p className="mt-1 text-xs text-slate-500">{option.description}</p>
+            </button>
+          ))}
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-[220px_1fr]">
+          <label className="block text-sm font-medium text-slate-700">
+            ป้ายกำกับ
+            <input
+              value={form.badge}
+              onChange={(event) => update("badge", event.target.value)}
+              placeholder="เช่น ประกาศ, โปรโมชัน, แจ้งเตือน"
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
+            />
+          </label>
+
+          <label className="block text-sm font-medium text-slate-700">
+            ข้อความหน้าแรก
+            <textarea
+              value={form.message}
+              onChange={(event) => update("message", event.target.value)}
+              rows={3}
+              placeholder="พิมพ์ข้อความที่ต้องการให้ผู้ใช้เห็นบนหน้าแรก"
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
+            />
+          </label>
+        </div>
+
+        <div className="rounded-lg bg-[#F3F7F5] p-4">
+          <p className="text-xs font-bold text-slate-500">ตัวอย่างที่จะแสดงหน้าแรก</p>
+          <p className="mt-2 text-sm font-bold text-[#2B7554]">{form.badge}</p>
+          <p className="mt-1 text-base text-slate-700">{form.message || defaultPublicAnnouncement.message}</p>
+        </div>
+
+        <div className="flex justify-end">
+          <button type="submit" className="rounded-md bg-[#0F8A5F] px-4 py-2 text-sm font-medium text-white">
+            บันทึกประกาศหน้าแรก
+          </button>
+        </div>
+      </form>
+    </SectionCard>
   );
 }
 
