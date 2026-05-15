@@ -8,6 +8,7 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 await build({
   root: projectRoot,
   configFile: false,
+  base: "/farmlink-dashboard/",
   plugins: [react()],
   resolve: {
     alias: {
