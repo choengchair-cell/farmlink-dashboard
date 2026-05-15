@@ -2943,19 +2943,37 @@ function App() {
   const currentMenus = menus[role];
 
   const menuBadgeCounts: Record<string, number> = {};
-  const myChatThreadCount = chatThreads.filter((thread) =>
-    role === "buyer" ? thread.buyerId === currentUser.id : role === "seller" ? thread.sellerId === currentUser.id : false
+  const isCurrentUserChatThread = (thread: ChatThread) =>
+    role === "buyer" ? thread.buyerId === currentUser.id : role === "seller" ? thread.sellerId === currentUser.id : false;
+  const isClosedChatThread = (thread: ChatThread) => {
+    if (thread.status === "closed") return true;
+
+    const threadMessages = chatMessages.filter((message) => message.threadId === thread.id);
+    const relatedRequest = requests.find((request) => request.id === thread.rfqId);
+    const relatedOrder = orders.find((order) => order.id === thread.orderId || order.requestId === thread.rfqId);
+    const workflowSteps = getWorkflowStepsForChat({
+      thread,
+      relatedRequest,
+      relatedOrder,
+      messages: threadMessages,
+    });
+
+    return workflowSteps.some((step) => step.key === "closed" && step.status === "completed");
+  };
+  const myChatThreadCount = chatThreads.filter(isCurrentUserChatThread).length;
+  const myActiveChatThreadCount = chatThreads.filter(
+    (thread) => isCurrentUserChatThread(thread) && !isClosedChatThread(thread)
   ).length;
 
   if (role === "buyer") {
-    menuBadgeCounts["แชทการจัดซื้อ"] = myChatThreadCount;
+    menuBadgeCounts["แชทการจัดซื้อ"] = myActiveChatThreadCount;
     menuBadgeCounts["ประวัติธุรกรรม"] =
       requests.filter((request) => request.buyerId === currentUser.id).length +
       orders.filter((order) => order.buyerId === currentUser.id).length;
   }
 
   if (role === "seller") {
-    menuBadgeCounts["แชทจากผู้ซื้อ"] = myChatThreadCount;
+    menuBadgeCounts["แชทจากผู้ซื้อ"] = myActiveChatThreadCount;
     menuBadgeCounts["ประวัติธุรกรรม"] =
       offers.filter((offer) => offer.sellerId === currentUser.id).length +
       orders.filter((order) => order.sellerId === currentUser.id).length;
@@ -3156,7 +3174,7 @@ function PublicCatalog({
       <section className="mx-auto max-w-7xl px-5 pb-10 pt-6">
         <div className="mx-auto max-w-4xl text-center">
           <p className="text-lg font-medium leading-relaxed text-[#4B6B5C]">
-            ระบบจัดซอร์สสินค้าเกษตร B2B ตรวจสอบได้ — ค้นหา เปรียบเทียบ และส่งขอจากผู้ผลิตโดยตรง
+            ระบบเชื่อมโยงผลผลิต ส่งตรงถึงธุรกิจคุณ — ค้นหา เปรียบเทียบ
           </p>
         </div>
 
