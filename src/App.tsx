@@ -190,9 +190,9 @@ function canBuyerCreatePoSo(offer: Offer): boolean {
 }
 
 function App() {
-  const [loggedInAccount, setLoggedInAccount] = useState<DemoAccount | null>(null);
+  const [loggedInAccount, setLoggedInAccount] = useState<DemoAccount | null>(demoAccounts[0]);
   const [loginUsername, setLoginUsername] = useState("buyer_demo01");
-  const [loginPassword, setLoginPassword] = useState("");
+  const [loginPassword, setLoginPassword] = useState("1111");
   const [loginError, setLoginError] = useState("");
 
   const currentRole: UserRole = loggedInAccount?.role || "buyer";
@@ -297,8 +297,9 @@ function App() {
   }
 
   function handleLogout() {
-    setLoggedInAccount(null);
-    setLoginPassword("");
+    setLoggedInAccount(demoAccounts[0]);
+    setLoginUsername("buyer_demo01");
+    setLoginPassword("1111");
     setLoginError("");
   }
 
@@ -437,8 +438,9 @@ function App() {
             <button
               type="button"
               onClick={() => {
-                setLoginUsername("");
-                setLoginPassword("");
+                setLoggedInAccount(demoAccounts[0]);
+                setLoginUsername("buyer_demo01");
+                setLoginPassword("1111");
                 setLoginError("");
               }}
               style={styles.closeLoginButton}
