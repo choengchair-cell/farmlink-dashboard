@@ -5,9 +5,11 @@ type UserRole = "buyer" | "seller";
 type OfferStatus =
   | "draft"
   | "sent"
-  | "countered"
+  | "buyer_requested_change"
+  | "seller_accepted_buyer_terms"
+  | "seller_countered"
   | "final_offer"
-  | "accepted"
+  | "buyer_accepted_final"
   | "rejected";
 
 type PurchaseRequest = {
@@ -35,13 +37,24 @@ type Offer = {
   quantity: number;
   quantityUnit: string;
   offeredPricePerUnit: string;
-  buyerCounterPricePerUnit?: string;
+  buyerRequestedPricePerUnit?: string;
+  sellerAcceptedPricePerUnit?: string;
   latestAgreedPricePerUnit?: string;
   deliveryDate: string;
   shippingFee: string;
   paymentTerm: string;
   note: string;
   status: OfferStatus;
+};
+
+type SellerFulfillment = {
+  preparationStatus: string;
+  deliveryDate: string;
+  shippingMethod: string;
+  pickupOrDeliveryLocation: string;
+  shippingCoordinator: string;
+  shippingContact: string;
+  deliveryEvidence: string;
 };
 
 type Order = {
@@ -59,7 +72,11 @@ type Order = {
   shippingFee: string;
   paymentTerm: string;
   createdAt: string;
+  fulfillment: SellerFulfillment;
 };
+
+const lockedActionCardMessage =
+  "ผู้ขายต้องตอบตกลงตามราคาที่ผู้ซื้อเสนอก่อน จึงจะกรอกข้อมูลการเตรียมสินค้า ขนส่ง เอกสาร และวันส่งมอบได้";
 
 function formatCurrencyTHB(value: number): string {
   return value.toLocaleString("th-TH", {
@@ -68,7 +85,11 @@ function formatCurrencyTHB(value: number): string {
 }
 
 function normalizeNumericText(value: string | number): string {
-  return String(value).replace(/,/g, "").replace(/บาท\/กก\.?/g, "").trim();
+  return String(value)
+    .replace(/,/g, "")
+    .replace(/บาท\/กก\.?/g, "")
+    .replace(/บาทต่อกก\.?/g, "")
+    .trim();
 }
 
 function calculateTotalAmountLabel(
@@ -108,91 +129,120 @@ function getStatusLabel(status: OfferStatus): string {
   const statusMap: Record<OfferStatus, string> = {
     draft: "แบบร่าง",
     sent: "ส่งข้อเสนอแล้ว",
-    countered: "อยู่ระหว่างต่อรอง",
+    buyer_requested_change: "ผู้ซื้อขอแก้ไขเงื่อนไข",
+    seller_accepted_buyer_terms: "ผู้ขายตกลงตามราคาผู้ซื้อแล้ว",
+    seller_countered: "ผู้ขายเสนอราคาใหม่",
     final_offer: "ส่งข้อเสนอสุดท้ายแล้ว",
-    accepted: "ยืนยันข้อเสนอแล้ว",
+    buyer_accepted_final: "ผู้ซื้อยืนยันข้อเสนอแล้ว",
     rejected: "ปฏิเสธข้อเสนอ",
   };
 
   return statusMap[status];
 }
 
-function getLatestPriceForOrder(offer: Offer): string {
+function getBuyerRequestedPrice(offer: Offer): string {
+  return offer.buyerRequestedPricePerUnit || "";
+}
+
+function getLatestPriceForDisplay(offer: Offer): string {
   return (
     offer.latestAgreedPricePerUnit ||
-    offer.buyerCounterPricePerUnit ||
+    offer.sellerAcceptedPricePerUnit ||
+    offer.buyerRequestedPricePerUnit ||
     offer.offeredPricePerUnit
   );
 }
 
+function canSellerUseFarmLinkActionCard(offer: Offer): boolean {
+  return offer.status === "seller_accepted_buyer_terms";
+}
+
+function canBuyerCreatePoSo(offer: Offer): boolean {
+  return offer.status === "seller_accepted_buyer_terms";
+}
+
 function App() {
-  const [currentRole, setCurrentRole] = useState<UserRole>("buyer");
+  const [currentRole, setCurrentRole] = useState<UserRole>("seller");
 
   const [purchaseRequest] = useState<PurchaseRequest>({
     id: "PR-2026-0001",
-    productName: "มันสำปะหลังสด",
+    productName: "ผักสลัดกรีนโอ๊ค",
     quantity: 500,
     quantityUnit: "กก.",
-    targetPricePerUnit: "55-70",
-    deliveryLocation: "เชียงใหม่",
-    requestedDeliveryDate: "2026-05-20",
+    targetPricePerUnit: "40",
+    deliveryLocation: "โรงแรมล้านนาเฮอริเทจ, เมืองเชียงใหม่",
+    requestedDeliveryDate: "2026-06-10",
     paymentTerm: "โอนภายใน 3 วันหลังส่งมอบ",
   });
 
   const [offer, setOffer] = useState<Offer>({
     id: "OF-2026-0001",
     purchaseRequestId: "PR-2026-0001",
-    sellerName: "สวนตัวอย่าง",
+    sellerName: "FarmLink Seller",
     quantity: 500,
     quantityUnit: "กก.",
-    offeredPricePerUnit: "70",
-    buyerCounterPricePerUnit: "",
+    offeredPricePerUnit: "45",
+    buyerRequestedPricePerUnit: "40",
+    sellerAcceptedPricePerUnit: "",
     latestAgreedPricePerUnit: "",
-    deliveryDate: "2026-05-20",
+    deliveryDate: "2026-06-10",
     shippingFee: "รวมค่าส่ง",
     paymentTerm: "โอนภายใน 3 วันหลังส่งมอบ",
-    note: "สินค้าพร้อมส่งตามจำนวน",
-    status: "sent",
+    note: "ผู้ซื้อขอแก้ไขเงื่อนไขเรื่องราคาเป็น 40 บาทต่อ กก.",
+    status: "buyer_requested_change",
+  });
+
+  const [fulfillment, setFulfillment] = useState<SellerFulfillment>({
+    preparationStatus: "เตรียมสินค้า / คัดเกรดตามคำสั่งซื้อแล้ว",
+    deliveryDate: "2026-06-10",
+    shippingMethod: "ผู้ขายจัดส่งเองตามเงื่อนไขที่ตกลงในระบบ",
+    pickupOrDeliveryLocation: "โรงแรมล้านนาเฮอริเทจ, เมืองเชียงใหม่",
+    shippingCoordinator: "ผู้ประสานงานขนส่งของผู้ขาย",
+    shippingContact: "ระบุเบอร์ติดต่อสำหรับขนส่งหลังสร้าง PO/SO",
+    deliveryEvidence: "รูปสินค้าก่อนส่ง, รูปขณะโหลด, ใบน้ำหนัก, ใบส่งของ",
   });
 
   const [messages, setMessages] = useState<NegotiationMessage[]>([
     {
       id: "MSG-1",
-      sender: "buyer",
+      sender: "seller",
       message:
-        "ต้องการซื้อ 500 กก. ราคาเป้าหมาย 55-70 บาท/กก. ส่งเชียงใหม่",
+        "เสนอขายผักสลัดกรีนโอ๊ค 500 กก. ราคา 45 บาท/กก. พร้อมส่งวันที่ 10 มิ.ย. 2026",
       createdAt: "09:30",
     },
     {
       id: "MSG-2",
-      sender: "seller",
+      sender: "buyer",
       message:
-        "เสนอขายได้ที่ 70 บาท/กก. จำนวน 500 กก. ส่งได้วันที่ 20 พ.ค.",
-      createdAt: "09:34",
+        "ผู้ซื้อขอแก้ไขเงื่อนไขสำหรับ ผักสลัดกรีนโอ๊ค เรื่องที่ต้องการแก้ไข: ราคา เงื่อนไขที่ต้องการ: ราคา 40 บาทต่อ กก. กรุณาให้ผู้ขายตรวจสอบและส่งเงื่อนไขใหม่กลับมาในแชท",
+      createdAt: "09:57",
     },
   ]);
 
-  const [counterPrice, setCounterPrice] = useState("60");
-  const [sellerNewPrice, setSellerNewPrice] = useState("65");
+  const [sellerCounterPrice, setSellerCounterPrice] = useState("42");
   const [chatInput, setChatInput] = useState("");
   const [order, setOrder] = useState<Order | null>(null);
   const [isPoSoModalOpen, setIsPoSoModalOpen] = useState(false);
 
-  const purchaseRequestTotalLabel = useMemo(() => {
+  const requestedPrice = getBuyerRequestedPrice(offer);
+  const sellerCanUseActionCard = canSellerUseFarmLinkActionCard(offer);
+  const buyerCanCreatePoSo = canBuyerCreatePoSo(offer);
+
+  const targetTotalLabel = useMemo(() => {
     return calculateTotalAmountLabel(
       purchaseRequest.quantity,
       purchaseRequest.targetPricePerUnit
     );
   }, [purchaseRequest.quantity, purchaseRequest.targetPricePerUnit]);
 
-  const offerTotalLabel = useMemo(() => {
-    return calculateTotalAmountLabel(
-      offer.quantity,
-      getLatestPriceForOrder(offer)
-    );
+  const latestTotalLabel = useMemo(() => {
+    return calculateTotalAmountLabel(offer.quantity, getLatestPriceForDisplay(offer));
   }, [offer]);
 
-  const canCreateOrder = offer.status === "accepted";
+  const buyerRequestedTotalLabel = useMemo(() => {
+    if (!requestedPrice) return "-";
+    return calculateTotalAmountLabel(offer.quantity, requestedPrice);
+  }, [offer.quantity, requestedPrice]);
 
   function appendMessage(sender: UserRole, message: string) {
     const now = new Date();
@@ -220,53 +270,48 @@ function App() {
     setChatInput("");
   }
 
-  function handleBuyerCounter() {
-    const trimmed = counterPrice.trim();
-    if (!trimmed) return;
+  function handleSellerAcceptBuyerPrice() {
+    if (!requestedPrice) return;
 
     setOffer((current) => ({
       ...current,
-      buyerCounterPricePerUnit: trimmed,
-      latestAgreedPricePerUnit: "",
-      status: "countered",
+      sellerAcceptedPricePerUnit: requestedPrice,
+      latestAgreedPricePerUnit: requestedPrice,
+      status: "seller_accepted_buyer_terms",
     }));
 
     appendMessage(
-      "buyer",
-      `ขอต่อรองราคาเป็น ${trimmed} บาท/${purchaseRequest.quantityUnit}`
+      "seller",
+      `ผู้ขายตอบตกลงตามราคาที่ผู้ซื้อเสนอ: ${requestedPrice} บาท/${offer.quantityUnit} และพร้อมดำเนินการเตรียมสินค้า/ขนส่ง`
     );
   }
 
-  function handleSellerNewOffer() {
-    const trimmed = sellerNewPrice.trim();
+  function handleSellerCounterOffer() {
+    const trimmed = sellerCounterPrice.trim();
     if (!trimmed) return;
 
     setOffer((current) => ({
       ...current,
       offeredPricePerUnit: trimmed,
+      sellerAcceptedPricePerUnit: "",
       latestAgreedPricePerUnit: trimmed,
-      status: "final_offer",
+      status: "seller_countered",
     }));
 
     appendMessage(
       "seller",
-      `เสนอราคาใหม่/ข้อเสนอสุดท้ายที่ ${trimmed} บาท/${purchaseRequest.quantityUnit}`
+      `ผู้ขายยังไม่ตกลงราคา ${requestedPrice || "-"} บาท/${offer.quantityUnit} และขอเสนอราคาใหม่เป็น ${trimmed} บาท/${offer.quantityUnit}`
     );
   }
 
-  function handleAcceptOffer() {
-    const agreedPrice = getLatestPriceForOrder(offer);
-
+  function handleBuyerAcceptFinalOffer() {
     setOffer((current) => ({
       ...current,
-      latestAgreedPricePerUnit: agreedPrice,
-      status: "accepted",
+      status: "buyer_accepted_final",
+      latestAgreedPricePerUnit: getLatestPriceForDisplay(current),
     }));
 
-    appendMessage(
-      "buyer",
-      `ยืนยันข้อเสนอที่ราคา ${agreedPrice} บาท/${purchaseRequest.quantityUnit}`
-    );
+    appendMessage("buyer", "ผู้ซื้อยืนยันข้อเสนอสุดท้ายของผู้ขายแล้ว");
   }
 
   function handleRejectOffer() {
@@ -275,13 +320,20 @@ function App() {
       status: "rejected",
     }));
 
-    appendMessage("buyer", "ปฏิเสธข้อเสนอขายนี้");
+    appendMessage(currentRole, "ปฏิเสธข้อเสนอนี้");
+  }
+
+  function handleFulfillmentChange(field: keyof SellerFulfillment, value: string) {
+    setFulfillment((current) => ({
+      ...current,
+      [field]: value,
+    }));
   }
 
   function handleCreatePoSo() {
-    if (offer.status !== "accepted") return;
+    if (!buyerCanCreatePoSo) return;
 
-    const agreedPrice = getLatestPriceForOrder(offer);
+    const agreedPrice = getLatestPriceForDisplay(offer);
     const newOrder: Order = {
       id: "PO-SO-2026-0001",
       purchaseRequestId: purchaseRequest.id,
@@ -293,10 +345,11 @@ function App() {
       quantityUnit: offer.quantityUnit,
       pricePerUnit: agreedPrice,
       totalAmountLabel: calculateTotalAmountLabel(offer.quantity, agreedPrice),
-      deliveryDate: offer.deliveryDate,
+      deliveryDate: fulfillment.deliveryDate,
       shippingFee: offer.shippingFee,
       paymentTerm: offer.paymentTerm,
       createdAt: new Date().toLocaleString("th-TH"),
+      fulfillment,
     };
 
     setOrder(newOrder);
@@ -307,10 +360,10 @@ function App() {
     <main style={styles.page}>
       <section style={styles.header}>
         <div>
-          <p style={styles.eyebrow}>Purchase Negotiation Flow</p>
-          <h1 style={styles.title}>เจรจาราคาก่อนสร้าง PO/SO</h1>
+          <p style={styles.eyebrow}>FarmLink Negotiation Gate</p>
+          <h1 style={styles.title}>ผู้ขายต้องตอบตกลงราคาผู้ซื้อก่อนดำเนินการขั้นถัดไป</h1>
           <p style={styles.subtitle}>
-            PO/SO จะถูกสร้างได้หลังจากผู้ซื้อกด “ยืนยันข้อเสนอ” เท่านั้น
+            FarmLink Action Card สำหรับผู้ขายจะถูกล็อกไว้ จนกว่าผู้ขายจะกด “ตกลงตามราคาที่ผู้ซื้อเสนอ”
           </p>
         </div>
 
@@ -356,12 +409,12 @@ function App() {
               }`}
             />
             <InfoRow
-              label="ราคาเป้าหมาย"
+              label="ราคาเป้าหมายผู้ซื้อ"
               value={`${purchaseRequest.targetPricePerUnit} บาท/${purchaseRequest.quantityUnit}`}
             />
-            <InfoRow label="มูลค่ารวม" value={purchaseRequestTotalLabel} />
-            <InfoRow label="สถานที่ส่งมอบ" value={purchaseRequest.deliveryLocation} />
-            <InfoRow label="วันที่ต้องการรับ" value={purchaseRequest.requestedDeliveryDate} />
+            <InfoRow label="มูลค่ารวมตามราคาเป้าหมาย" value={targetTotalLabel} />
+            <InfoRow label="สถานที่รับ/ส่งสินค้า" value={purchaseRequest.deliveryLocation} />
+            <InfoRow label="รอบส่ง / กำหนดส่ง" value={purchaseRequest.requestedDeliveryDate} />
             <InfoRow label="เงื่อนไขชำระเงิน" value={purchaseRequest.paymentTerm} />
           </div>
         </article>
@@ -369,7 +422,7 @@ function App() {
         <article style={styles.card}>
           <div style={styles.cardHeader}>
             <div>
-              <p style={styles.eyebrow}>ข้อเสนอขาย</p>
+              <p style={styles.eyebrow}>สถานะข้อเสนอ</p>
               <h2 style={styles.cardTitle}>{offer.sellerName}</h2>
             </div>
             <span style={styles.statusBadge}>{getStatusLabel(offer.status)}</span>
@@ -377,33 +430,26 @@ function App() {
 
           <div style={styles.infoList}>
             <InfoRow
-              label="ปริมาณที่เสนอ"
-              value={`${formatCurrencyTHB(offer.quantity)} ${offer.quantityUnit}`}
-            />
-            <InfoRow
-              label="ราคาที่เสนอ"
+              label="ราคาที่ผู้ขายเสนอเดิม"
               value={`${offer.offeredPricePerUnit || "-"} บาท/${offer.quantityUnit}`}
             />
             <InfoRow
-              label="ราคาที่ผู้ซื้อขอต่อ"
+              label="ราคาที่ผู้ซื้อขอแก้ไข"
               value={
-                offer.buyerCounterPricePerUnit
-                  ? `${offer.buyerCounterPricePerUnit} บาท/${offer.quantityUnit}`
-                  : "-"
+                requestedPrice ? `${requestedPrice} บาท/${offer.quantityUnit}` : "-"
               }
             />
+            <InfoRow label="มูลค่ารวมตามราคาผู้ซื้อ" value={buyerRequestedTotalLabel} />
             <InfoRow
-              label="ราคาที่ตกลงล่าสุด"
+              label="ราคาที่ผู้ขายตอบตกลง"
               value={
-                offer.latestAgreedPricePerUnit
-                  ? `${offer.latestAgreedPricePerUnit} บาท/${offer.quantityUnit}`
+                offer.sellerAcceptedPricePerUnit
+                  ? `${offer.sellerAcceptedPricePerUnit} บาท/${offer.quantityUnit}`
                   : "-"
               }
             />
-            <InfoRow label="มูลค่ารวมล่าสุด" value={offerTotalLabel} />
-            <InfoRow label="วันส่งมอบ" value={offer.deliveryDate} />
-            <InfoRow label="ค่าขนส่ง" value={offer.shippingFee} />
-            <InfoRow label="เงื่อนไขชำระเงิน" value={offer.paymentTerm} />
+            <InfoRow label="มูลค่ารวมล่าสุด" value={latestTotalLabel} />
+            <InfoRow label="หมายเหตุ" value={offer.note} />
           </div>
         </article>
       </section>
@@ -413,10 +459,10 @@ function App() {
           <div style={styles.cardHeader}>
             <div>
               <p style={styles.eyebrow}>แชทการจัดซื้อ</p>
-              <h2 style={styles.cardTitle}>เจรจาก่อนสร้าง PO/SO</h2>
+              <h2 style={styles.cardTitle}>ราคาและเงื่อนไขต้องตกลงกันในแชทก่อน</h2>
             </div>
             <span style={styles.badge}>
-              โหมดปัจจุบัน: {currentRole === "buyer" ? "ผู้ซื้อ" : "ผู้ขาย"}
+              โหมด: {currentRole === "buyer" ? "ผู้ซื้อ" : "ผู้ขาย"}
             </span>
           </div>
 
@@ -447,53 +493,53 @@ function App() {
               onKeyDown={(event) => {
                 if (event.key === "Enter") handleSendChat();
               }}
-              placeholder="พิมพ์ข้อความเจรจา เช่น ราคา วันส่งมอบ ค่าขนส่ง เงื่อนไขชำระเงิน"
+              placeholder="พิมพ์ข้อความเกี่ยวกับราคา ปริมาณ ขนส่ง เอกสาร หรือวันส่งมอบ"
               style={styles.input}
             />
             <button type="button" onClick={handleSendChat} style={styles.primaryButton}>
-              ส่งแชท
+              ส่งข้อความ
             </button>
           </div>
         </article>
 
         <article style={styles.card}>
-          <p style={styles.eyebrow}>Actions</p>
-          <h2 style={styles.cardTitle}>ปุ่มเจรจาราคาและยืนยันข้อเสนอ</h2>
+          <p style={styles.eyebrow}>Seller Price Confirmation</p>
+          <h2 style={styles.cardTitle}>ผู้ขายต้องตอบตกลงตามราคาที่ผู้ซื้อเสนอ</h2>
 
-          <div style={styles.actionPanel}>
+          <div style={styles.buyerRequestBox}>
+            <p style={styles.helperText}>ราคาที่ผู้ซื้อขอแก้ไข</p>
+            <strong style={styles.requestedPrice}>
+              {requestedPrice ? `${requestedPrice} บาท/${offer.quantityUnit}` : "-"}
+            </strong>
+            <p style={styles.helperText}>มูลค่ารวม: {buyerRequestedTotalLabel}</p>
+          </div>
+
+          <div style={styles.buttonColumn}>
+            <button
+              type="button"
+              onClick={handleSellerAcceptBuyerPrice}
+              disabled={currentRole !== "seller" || !requestedPrice}
+              style={{
+                ...styles.primaryButton,
+                ...((currentRole !== "seller" || !requestedPrice) ? styles.disabledButton : {}),
+              }}
+            >
+              ตกลงตามราคาที่ผู้ซื้อเสนอ
+            </button>
+
             <div style={styles.actionGroup}>
-              <label style={styles.label}>ผู้ซื้อขอต่อรองราคา</label>
+              <label style={styles.label}>ถ้าไม่ตกลง ให้เสนอราคาใหม่</label>
               <div style={styles.inlineInput}>
                 <input
-                  value={counterPrice}
-                  onChange={(event) => setCounterPrice(event.target.value)}
+                  value={sellerCounterPrice}
+                  onChange={(event) => setSellerCounterPrice(event.target.value)}
                   style={styles.input}
-                  placeholder="เช่น 60"
+                  placeholder="เช่น 42"
                 />
                 <button
                   type="button"
-                  onClick={handleBuyerCounter}
-                  disabled={currentRole !== "buyer" || offer.status === "accepted"}
-                  style={styles.secondaryButton}
-                >
-                  ขอต่อรองราคา
-                </button>
-              </div>
-            </div>
-
-            <div style={styles.actionGroup}>
-              <label style={styles.label}>ผู้ขายเสนอราคาใหม่ / ส่งข้อเสนอสุดท้าย</label>
-              <div style={styles.inlineInput}>
-                <input
-                  value={sellerNewPrice}
-                  onChange={(event) => setSellerNewPrice(event.target.value)}
-                  style={styles.input}
-                  placeholder="เช่น 65"
-                />
-                <button
-                  type="button"
-                  onClick={handleSellerNewOffer}
-                  disabled={currentRole !== "seller" || offer.status === "accepted"}
+                  onClick={handleSellerCounterOffer}
+                  disabled={currentRole !== "seller"}
                   style={styles.secondaryButton}
                 >
                   เสนอราคาใหม่
@@ -501,82 +547,157 @@ function App() {
               </div>
             </div>
 
-            <div style={styles.buttonRow}>
-              <button
-                type="button"
-                onClick={handleAcceptOffer}
-                disabled={currentRole !== "buyer" || offer.status === "accepted"}
-                style={styles.primaryButton}
-              >
-                ยืนยันข้อเสนอ
-              </button>
+            <button
+              type="button"
+              onClick={handleBuyerAcceptFinalOffer}
+              disabled={currentRole !== "buyer" || offer.status !== "seller_countered"}
+              style={{
+                ...styles.secondaryButton,
+                ...((currentRole !== "buyer" || offer.status !== "seller_countered")
+                  ? styles.disabledButton
+                  : {}),
+              }}
+            >
+              ผู้ซื้อยืนยันข้อเสนอใหม่ของผู้ขาย
+            </button>
 
-              <button
-                type="button"
-                onClick={handleRejectOffer}
-                disabled={currentRole !== "buyer" || offer.status === "accepted"}
-                style={styles.dangerButton}
-              >
-                ปฏิเสธข้อเสนอ
-              </button>
-            </div>
-
-            <div style={styles.divider} />
-
-            <div style={styles.poSoBox}>
-              <h3 style={styles.sectionTitle}>สร้าง PO/SO</h3>
-              <p style={styles.helperText}>
-                สร้างได้เฉพาะเมื่อสถานะเป็น “ยืนยันข้อเสนอแล้ว”
-              </p>
-
-              <button
-                type="button"
-                onClick={handleCreatePoSo}
-                disabled={!canCreateOrder}
-                style={{
-                  ...styles.primaryButton,
-                  ...(!canCreateOrder ? styles.disabledButton : {}),
-                }}
-              >
-                สร้าง / เปิด PO/SO
-              </button>
-
-              {!canCreateOrder && (
-                <p style={styles.warningText}>
-                  ยังสร้าง PO/SO ไม่ได้ กรุณายืนยันข้อเสนอก่อน
-                </p>
-              )}
-            </div>
+            <button type="button" onClick={handleRejectOffer} style={styles.dangerButton}>
+              ปฏิเสธข้อเสนอ
+            </button>
           </div>
         </article>
       </section>
 
       <section style={styles.card}>
-        <p style={styles.eyebrow}>สรุปการเจรจาราคา</p>
-        <h2 style={styles.cardTitle}>ราคาล่าสุดก่อนสร้างเอกสาร</h2>
+        <div style={styles.actionCardHeader}>
+          <div>
+            <p style={styles.eyebrow}>FarmLink Action Card สำหรับผู้ขาย</p>
+            <h2 style={styles.cardTitle}>ขั้นตอนที่ 8: ดำเนินการส่งสินค้า</h2>
+            <p style={styles.subtitleSmall}>
+              ผู้ขายกรอกข้อมูลการเตรียมสินค้า รอบส่ง ผู้ประสานงาน และเอกสารส่งมอบ
+            </p>
+          </div>
+          <span
+            style={{
+              ...styles.pill,
+              ...(sellerCanUseActionCard ? styles.pillReady : styles.pillLocked),
+            }}
+          >
+            {sellerCanUseActionCard ? "เปิดให้ดำเนินการแล้ว" : "ล็อกไว้ก่อน"}
+          </span>
+        </div>
 
-        <div style={styles.summaryGrid}>
-          <SummaryBox
-            title="ราคาที่เสนอ"
-            value={`${offer.offeredPricePerUnit || "-"} บาท/${offer.quantityUnit}`}
-          />
-          <SummaryBox
-            title="ราคาที่ผู้ซื้อขอต่อ"
-            value={
-              offer.buyerCounterPricePerUnit
-                ? `${offer.buyerCounterPricePerUnit} บาท/${offer.quantityUnit}`
-                : "-"
-            }
-          />
-          <SummaryBox
-            title="ราคาที่ตกลงล่าสุด"
-            value={
-              offer.latestAgreedPricePerUnit
-                ? `${offer.latestAgreedPricePerUnit} บาท/${offer.quantityUnit}`
-                : "-"
-            }
-          />
-          <SummaryBox title="มูลค่ารวมล่าสุด" value={offerTotalLabel} />
+        {!sellerCanUseActionCard && (
+          <div style={styles.lockedNotice}>
+            <strong>ยังดำเนินการขั้นตอนนี้ไม่ได้</strong>
+            <p>{lockedActionCardMessage}</p>
+            <p>
+              ให้ผู้ขายกดปุ่ม “ตกลงตามราคาที่ผู้ซื้อเสนอ” ที่ราคา{" "}
+              <strong>{requestedPrice || "-"} บาท/{offer.quantityUnit}</strong> ก่อน
+            </p>
+          </div>
+        )}
+
+        <fieldset disabled={!sellerCanUseActionCard} style={styles.fieldset}>
+          <div style={styles.formGrid}>
+            <FormField label="สถานะการเตรียมสินค้า">
+              <select
+                value={fulfillment.preparationStatus}
+                onChange={(event) =>
+                  handleFulfillmentChange("preparationStatus", event.target.value)
+                }
+                style={styles.input}
+              >
+                <option>เตรียมสินค้า / คัดเกรดตามคำสั่งซื้อแล้ว</option>
+                <option>กำลังเตรียมสินค้า</option>
+                <option>รอคัดเกรดสินค้า</option>
+              </select>
+            </FormField>
+
+            <FormField label="รอบส่ง / กำหนดส่ง">
+              <input
+                value={fulfillment.deliveryDate}
+                onChange={(event) =>
+                  handleFulfillmentChange("deliveryDate", event.target.value)
+                }
+                style={styles.input}
+              />
+            </FormField>
+
+            <FormField label="รูปแบบขนส่ง">
+              <select
+                value={fulfillment.shippingMethod}
+                onChange={(event) =>
+                  handleFulfillmentChange("shippingMethod", event.target.value)
+                }
+                style={styles.input}
+              >
+                <option>ผู้ขายจัดส่งเองตามเงื่อนไขที่ตกลงในระบบ</option>
+                <option>ผู้ซื้อเข้ารับสินค้าเอง</option>
+                <option>ขนส่งบุคคลที่สาม</option>
+              </select>
+            </FormField>
+
+            <FormField label="สถานที่รับ/ส่งสินค้า">
+              <input
+                value={fulfillment.pickupOrDeliveryLocation}
+                onChange={(event) =>
+                  handleFulfillmentChange("pickupOrDeliveryLocation", event.target.value)
+                }
+                style={styles.input}
+              />
+            </FormField>
+
+            <FormField label="ผู้ประสานงานขนส่ง">
+              <input
+                value={fulfillment.shippingCoordinator}
+                onChange={(event) =>
+                  handleFulfillmentChange("shippingCoordinator", event.target.value)
+                }
+                style={styles.input}
+              />
+            </FormField>
+
+            <FormField label="เบอร์ติดต่อสำหรับขนส่ง">
+              <input
+                value={fulfillment.shippingContact}
+                onChange={(event) =>
+                  handleFulfillmentChange("shippingContact", event.target.value)
+                }
+                style={styles.input}
+              />
+            </FormField>
+          </div>
+
+          <FormField label="เอกสาร / หลักฐานที่จะใช้ส่งมอบ">
+            <input
+              value={fulfillment.deliveryEvidence}
+              onChange={(event) =>
+                handleFulfillmentChange("deliveryEvidence", event.target.value)
+              }
+              style={styles.input}
+            />
+          </FormField>
+        </fieldset>
+
+        <div style={styles.poSoRow}>
+          <div>
+            <h3 style={styles.sectionTitle}>สร้าง PO/SO</h3>
+            <p style={styles.helperText}>
+              สร้างได้หลังจากผู้ขายตกลงราคาผู้ซื้อแล้วเท่านั้น เพื่อให้ PO/SO เป็นเอกสารยืนยัน ไม่ใช่พื้นที่ต่อรอง
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleCreatePoSo}
+            disabled={!buyerCanCreatePoSo}
+            style={{
+              ...styles.primaryButton,
+              ...(!buyerCanCreatePoSo ? styles.disabledButton : {}),
+            }}
+          >
+            สร้าง / เปิด PO/SO
+          </button>
         </div>
       </section>
 
@@ -607,19 +728,25 @@ function App() {
                 value={`${formatCurrencyTHB(order.quantity)} ${order.quantityUnit}`}
               />
               <InfoRow
-                label="ราคาต่อหน่วย"
+                label="ราคาต่อหน่วยที่ตกลง"
                 value={`${order.pricePerUnit} บาท/${order.quantityUnit}`}
               />
               <InfoRow label="มูลค่ารวม" value={order.totalAmountLabel} />
               <InfoRow label="วันส่งมอบ" value={order.deliveryDate} />
               <InfoRow label="ค่าขนส่ง" value={order.shippingFee} />
               <InfoRow label="เงื่อนไขชำระเงิน" value={order.paymentTerm} />
+              <InfoRow label="สถานะการเตรียมสินค้า" value={order.fulfillment.preparationStatus} />
+              <InfoRow label="รูปแบบขนส่ง" value={order.fulfillment.shippingMethod} />
+              <InfoRow label="สถานที่รับ/ส่งสินค้า" value={order.fulfillment.pickupOrDeliveryLocation} />
+              <InfoRow label="ผู้ประสานงานขนส่ง" value={order.fulfillment.shippingCoordinator} />
+              <InfoRow label="เบอร์ติดต่อสำหรับขนส่ง" value={order.fulfillment.shippingContact} />
+              <InfoRow label="เอกสารส่งมอบ" value={order.fulfillment.deliveryEvidence} />
               <InfoRow label="สร้างเมื่อ" value={order.createdAt} />
             </div>
 
             <div style={styles.modalFooter}>
               <p style={styles.helperText}>
-                PO/SO นี้สร้างจากราคาที่ผู้ซื้อยืนยันแล้ว ไม่ใช่พื้นที่เจรจาราคา
+                PO/SO นี้สร้างจากราคาที่ผู้ขายตอบตกลงตามราคาผู้ซื้อแล้ว
               </p>
             </div>
           </article>
@@ -638,12 +765,18 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function SummaryBox({ title, value }: { title: string; value: string }) {
+function FormField({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div style={styles.summaryBox}>
-      <span style={styles.infoLabel}>{title}</span>
-      <strong style={styles.summaryValue}>{value}</strong>
-    </div>
+    <label style={styles.formField}>
+      <span style={styles.label}>{label}</span>
+      {children}
+    </label>
   );
 }
 
@@ -682,6 +815,12 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#64748b",
     fontSize: 16,
   },
+  subtitleSmall: {
+    margin: "6px 0 0",
+    color: "#2563eb",
+    fontSize: 14,
+    lineHeight: 1.5,
+  },
   roleSwitch: {
     display: "flex",
     background: "#ffffff",
@@ -712,12 +851,14 @@ const styles: Record<string, React.CSSProperties> = {
   },
   negotiationGrid: {
     display: "grid",
-    gridTemplateColumns: "1.4fr 1fr",
+    gridTemplateColumns: "1.35fr 1fr",
     gap: 18,
     maxWidth: 1180,
     margin: "0 auto 18px",
   },
   card: {
+    maxWidth: 1180,
+    margin: "0 auto 18px",
     background: "#ffffff",
     borderRadius: 20,
     padding: 20,
@@ -776,7 +917,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
   },
   chatBox: {
-    height: 360,
+    height: 340,
     overflowY: "auto",
     display: "flex",
     flexDirection: "column",
@@ -787,7 +928,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #e2e8f0",
   },
   message: {
-    maxWidth: "82%",
+    maxWidth: "84%",
     borderRadius: 16,
     padding: 12,
     boxShadow: "0 4px 12px rgba(15, 23, 42, 0.06)",
@@ -825,12 +966,13 @@ const styles: Record<string, React.CSSProperties> = {
     outline: "none",
     fontSize: 14,
     background: "#ffffff",
+    boxSizing: "border-box",
   },
   primaryButton: {
     border: 0,
     borderRadius: 12,
     padding: "11px 16px",
-    background: "#172033",
+    background: "#07855f",
     color: "#ffffff",
     fontWeight: 800,
     cursor: "pointer",
@@ -860,10 +1002,23 @@ const styles: Record<string, React.CSSProperties> = {
     opacity: 0.45,
     cursor: "not-allowed",
   },
-  actionPanel: {
+  buyerRequestBox: {
     display: "grid",
-    gap: 16,
+    gap: 6,
+    padding: 16,
+    borderRadius: 16,
+    background: "#eff6ff",
+    border: "1px solid #bfdbfe",
     marginTop: 16,
+    marginBottom: 16,
+  },
+  requestedPrice: {
+    fontSize: 30,
+    color: "#1d4ed8",
+  },
+  buttonColumn: {
+    display: "grid",
+    gap: 12,
   },
   actionGroup: {
     display: "grid",
@@ -879,19 +1034,60 @@ const styles: Record<string, React.CSSProperties> = {
     gridTemplateColumns: "1fr auto",
     gap: 10,
   },
-  buttonRow: {
+  actionCardHeader: {
     display: "flex",
-    gap: 10,
-    flexWrap: "wrap",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "flex-start",
+    marginBottom: 16,
   },
-  divider: {
-    height: 1,
-    background: "#e2e8f0",
+  pill: {
+    display: "inline-flex",
+    alignItems: "center",
+    borderRadius: 999,
+    padding: "10px 16px",
+    fontSize: 13,
+    fontWeight: 900,
+    whiteSpace: "nowrap",
   },
-  poSoBox: {
+  pillReady: {
+    background: "#dcfce7",
+    color: "#166534",
+  },
+  pillLocked: {
+    background: "#e0f2fe",
+    color: "#075985",
+  },
+  lockedNotice: {
+    padding: 16,
+    borderRadius: 16,
+    background: "#fff7ed",
+    border: "1px solid #fed7aa",
+    color: "#9a3412",
+    marginBottom: 16,
+  },
+  fieldset: {
+    border: 0,
+    padding: 0,
+    margin: 0,
+  },
+  formGrid: {
     display: "grid",
-    gap: 10,
-    padding: 14,
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    gap: 14,
+    marginBottom: 14,
+  },
+  formField: {
+    display: "grid",
+    gap: 8,
+  },
+  poSoRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 16,
+    alignItems: "center",
+    marginTop: 18,
+    padding: 16,
     borderRadius: 16,
     background: "#f8fafc",
     border: "1px solid #e2e8f0",
@@ -906,29 +1102,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
     lineHeight: 1.5,
   },
-  warningText: {
-    margin: 0,
-    color: "#b45309",
-    fontSize: 14,
-    fontWeight: 700,
-  },
-  summaryGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-    gap: 12,
-    marginTop: 16,
-  },
-  summaryBox: {
-    display: "grid",
-    gap: 6,
-    borderRadius: 16,
-    background: "#f8fafc",
-    border: "1px solid #e2e8f0",
-    padding: 14,
-  },
-  summaryValue: {
-    fontSize: 18,
-  },
   modalBackdrop: {
     position: "fixed",
     inset: 0,
@@ -939,7 +1112,7 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 50,
   },
   modal: {
-    width: "min(720px, 100%)",
+    width: "min(760px, 100%)",
     maxHeight: "88vh",
     overflowY: "auto",
     background: "#ffffff",
