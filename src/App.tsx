@@ -1081,6 +1081,20 @@ function extractFormalOfferUnitPrice(message?: string) {
   return extractSingleUnitPrice(priceLine);
 }
 
+function isBuyerPriceNegotiationMessage(message?: string) {
+  if (!message) return false;
+
+  const mentionsPrice = message.includes("ราคา") || message.includes("บาท");
+  const asksToNegotiate =
+    message.includes("ขอแก้ไข") ||
+    message.includes("ต่อรอง") ||
+    message.includes("ขอราคา") ||
+    message.includes("ราคาที่ต้องการ") ||
+    message.includes("เงื่อนไขที่ต้องการ");
+
+  return mentionsPrice && asksToNegotiate;
+}
+
 function getQuantityForKgPrice(request: PurchaseRequest) {
   return request.unit.includes("ตัน") ? request.quantity * 1000 : request.quantity;
 }
@@ -6144,9 +6158,7 @@ function ChatModal({
       (item) =>
         item.senderRole === "buyer" &&
         item.messageType === "user_message" &&
-        (item.message.includes("ผู้ซื้อขอแก้ไขเงื่อนไข") ||
-          item.message.includes("ผู้ซื้อขอแก้ไขข้อเสนอขายอย่างเป็นทางการ")) &&
-        (item.message.includes("ราคา") || item.message.includes("บาท"))
+        isBuyerPriceNegotiationMessage(item.message)
     );
 
   const latestBuyerAcceptedFormalOfferMessage = [...sortedMessages]
@@ -6199,6 +6211,15 @@ function ChatModal({
   const isPriceNegotiationPending =
     Boolean(latestBuyerPriceNegotiationMessage) &&
     !latestBuyerAcceptedFormalOfferAfterLatestPriceNegotiation;
+  const latestBuyerMessageNeedsPriceConfirmation =
+    currentUser.role === "seller" &&
+    Boolean(latestBuyerMessage) &&
+    isBuyerPriceNegotiationMessage(latestBuyerMessage?.message) &&
+    !latestSellerFormalOfferAfterLatestPriceNegotiation;
+  const priceNegotiationBlocksNextSellerAction =
+    sellerMustConfirmLatestBuyerPrice ||
+    isPriceNegotiationPending ||
+    latestBuyerMessageNeedsPriceConfirmation;
 
   const sellerHasSentFormalOfferAfterBuyerAccepted = latestBuyerTermsAcceptedMessage
     ? sortedMessages.some(
@@ -6223,7 +6244,7 @@ function ChatModal({
   const shouldShowSellerFormalOfferActionCard =
     currentUser.role === "seller" &&
     Boolean(relatedRequest) &&
-    (sellerMustConfirmLatestBuyerPrice ||
+    (priceNegotiationBlocksNextSellerAction ||
       (Boolean(latestBuyerTermsAcceptedMessage) && !sellerHasSentFormalOfferAfterBuyerAccepted) ||
       (Boolean(latestBuyerFormalOfferRevisionMessage) && !sellerHasSentFormalOfferAfterLatestRevision));
 
@@ -6263,7 +6284,7 @@ function ChatModal({
     currentUser.role === "seller" &&
     Boolean(relatedRequest) &&
     Boolean(latestBuyerAcceptedFormalOfferMessage) &&
-    !isPriceNegotiationPending &&
+    !priceNegotiationBlocksNextSellerAction &&
     !sellerHasCreatedPoSoInChatAfterBuyerAccepted;
 
   const latestPoSoCreatedMessage = [...sortedMessages]
@@ -6411,6 +6432,7 @@ function ChatModal({
   const shouldShowSellerPaymentInstructionCard =
     currentUser.role === "seller" &&
     Boolean(latestBuyerConfirmedDeliveryMessage) &&
+    !priceNegotiationBlocksNextSellerAction &&
     !latestSellerPaymentInstructionMessage &&
     !latestBuyerDeliveryIssueMessage;
 
@@ -6422,6 +6444,7 @@ function ChatModal({
   const shouldShowSellerConfirmPaymentCard =
     currentUser.role === "seller" &&
     Boolean(latestBuyerPaymentProofMessage) &&
+    !priceNegotiationBlocksNextSellerAction &&
     !latestSellerPaymentConfirmedMessage;
 
   const shouldShowBuyerReceiveGoodsCard =
@@ -6433,7 +6456,7 @@ function ChatModal({
   const shouldShowSellerDeliveryActionCard =
     currentUser.role === "seller" &&
     Boolean(latestPoSoCreatedMessage) &&
-    !isPriceNegotiationPending &&
+    !priceNegotiationBlocksNextSellerAction &&
     !shouldShowSellerAfterBuyerAcceptedOfferActionCard &&
     !latestBuyerDeliveryProofAcceptedIsAfterCorrection &&
     (!sellerHasSentDeliveryPlanAfterPoSo ||
@@ -8417,7 +8440,7 @@ function ChatModal({
                     <div>
                       <p className="text-sm font-bold text-emerald-900">FarmLink Action Card สำหรับผู้ขาย</p>
                       <p className="mt-1 text-xs text-[#06603F]">
-                        {sellerMustConfirmLatestBuyerPrice
+                        {priceNegotiationBlocksNextSellerAction
                           ? "ผู้ซื้อขอแก้ไขราคา ต้องให้ผู้ขายยืนยันราคาสุดท้ายกลับมาก่อน ระบบจึงจะแสดงขั้นตอนถัดไป"
                           : "ผู้ซื้อยืนยันเงื่อนไขเบื้องต้นแล้ว ขั้นตอนถัดไปคือผู้ขายส่งข้อเสนอขายอย่างเป็นทางการ เพื่อให้ผู้ซื้อยืนยันเป็นคำสั่งซื้อ"}
                       </p>
@@ -8427,7 +8450,7 @@ function ChatModal({
                     </span>
                   </div>
 
-                  {sellerMustConfirmLatestBuyerPrice ? (
+                  {priceNegotiationBlocksNextSellerAction ? (
                     <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
                       <p className="font-bold">รอผู้ขายยืนยันราคาใหม่จากผู้ซื้อ</p>
                       <p className="mt-1">
