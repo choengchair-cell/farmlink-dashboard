@@ -14,6 +14,15 @@ type User = {
   verificationStatus?: string;
 };
 
+type RegistrationInput = {
+  role: "buyer" | "seller";
+  username: string;
+  password: string;
+  displayName: string;
+  province: string;
+  organizationType: string;
+};
+
 type ProductStatus = "draft" | "pending_review" | "active" | "rejected" | "suspended";
 type StockStatus = "available" | "limited" | "reserved" | "out_of_stock" | "harvesting_soon";
 type DeliveryAreaType = "same_district" | "same_province" | "nearby_province" | "nationwide" | "custom";
@@ -640,6 +649,7 @@ const REQUESTS_STORAGE_KEY = "farmlink_purchase_requests";
 const OFFERS_STORAGE_KEY = "farmlink_offers";
 const ORDERS_STORAGE_KEY = "farmlink_orders";
 const REVIEWS_STORAGE_KEY = "farmlink_reviews";
+const REGISTERED_USERS_STORAGE_KEY = "farmlink_registered_users";
 
 function loadStoredArray<T>(key: string, fallback: T[]): T[] {
   if (typeof window === "undefined") return fallback;
@@ -1059,66 +1069,6 @@ const initialReviews: BuyerReview[] = [
 
 function getRemainingQuantity(product: PublicProduct) {
   return Math.max(product.availableQuantity - product.reservedQuantity - product.soldQuantity, 0);
-}
-
-function formatBahtAmount(value: number) {
-  return `${Math.round(value).toLocaleString("th-TH")} บาท`;
-}
-
-function extractPriceNumbers(value?: string) {
-  return (value?.match(/\d+(?:,\d{3})*(?:\.\d+)?/g) || [])
-    .map((item) => Number(item.replace(/,/g, "")))
-    .filter((item) => Number.isFinite(item) && item > 0);
-}
-
-function extractSingleUnitPrice(value?: string) {
-  const priceNumbers = extractPriceNumbers(value);
-  return priceNumbers.length === 1 ? priceNumbers[0] : 0;
-}
-
-function extractFormalOfferUnitPrice(message?: string) {
-  const priceLine = message?.match(/ราคา(?:เสนอ|ที่ตกลงสุดท้าย)\s*:\s*([^\n]+)/)?.[1];
-  return extractSingleUnitPrice(priceLine);
-}
-
-function isBuyerPriceNegotiationMessage(message?: string) {
-  if (!message) return false;
-
-  const mentionsPrice = message.includes("ราคา") || message.includes("บาท");
-  const asksToNegotiate =
-    message.includes("ขอแก้ไข") ||
-    message.includes("ต่อรอง") ||
-    message.includes("ขอราคา") ||
-    message.includes("ราคาที่ต้องการ") ||
-    message.includes("เงื่อนไขที่ต้องการ");
-
-  return mentionsPrice && asksToNegotiate;
-}
-
-function getQuantityForKgPrice(request: PurchaseRequest) {
-  return request.unit.includes("ตัน") ? request.quantity * 1000 : request.quantity;
-}
-
-function getTradeDocumentTotalLabel(relatedRequest?: PurchaseRequest) {
-  if (!relatedRequest) return "รอข้อมูลราคาเสนอที่ตกลง";
-
-  const priceNumbers = extractPriceNumbers(relatedRequest.targetPrice);
-  if (priceNumbers.length === 0 || relatedRequest.quantity <= 0) {
-    return "รอข้อมูลราคาเสนอที่ตกลง";
-  }
-
-  const isPricePerKg = /บาท\s*\/\s*(กก\.?|กิโล|กิโลกรัม)/.test(relatedRequest.targetPrice);
-  const quantityForPrice = isPricePerKg ? getQuantityForKgPrice(relatedRequest) : relatedRequest.quantity;
-  const lowPrice = priceNumbers[0];
-  const highPrice = priceNumbers[1] || lowPrice;
-  const lowTotal = Math.min(lowPrice, highPrice) * quantityForPrice;
-  const highTotal = Math.max(lowPrice, highPrice) * quantityForPrice;
-
-  if (lowTotal === highTotal) {
-    return `ประมาณ ${formatBahtAmount(lowTotal)}`;
-  }
-
-  return `ประมาณ ${Math.round(lowTotal).toLocaleString("th-TH")}-${Math.round(highTotal).toLocaleString("th-TH")} บาท`;
 }
 
 function getStockStatusLabel(product: PublicProduct) {
@@ -1851,6 +1801,7 @@ function App() {
   const [offers, setOffers] = useState<Offer[]>(() => loadStoredArray<Offer>(OFFERS_STORAGE_KEY, initialOffers));
   const [orders, setOrders] = useState<Order[]>(() => loadStoredArray<Order>(ORDERS_STORAGE_KEY, initialOrders));
   const [reviews, setReviews] = useState<BuyerReview[]>(() => loadStoredArray<BuyerReview>(REVIEWS_STORAGE_KEY, initialReviews));
+  const [registeredUsers, setRegisteredUsers] = useState<User[]>(() => loadStoredArray<User>(REGISTERED_USERS_STORAGE_KEY, []));
   const [chatThreads, setChatThreads] = useState<ChatThread[]>(() => loadStoredArray<ChatThread>(CHAT_THREADS_STORAGE_KEY, initialChatThreads));
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => loadStoredArray<ChatMessage>(CHAT_MESSAGES_STORAGE_KEY, initialChatMessages));
   const [selectedChatThread, setSelectedChatThread] = useState<ChatThread | null>(null);
@@ -1883,6 +1834,10 @@ function App() {
   }, [reviews]);
 
   useEffect(() => {
+    saveStoredArray(REGISTERED_USERS_STORAGE_KEY, registeredUsers);
+  }, [registeredUsers]);
+
+  useEffect(() => {
     const reloadChatStateFromStorage = () => {
       setChatThreads(loadStoredArray<ChatThread>(CHAT_THREADS_STORAGE_KEY, initialChatThreads));
       setChatMessages(loadStoredArray<ChatMessage>(CHAT_MESSAGES_STORAGE_KEY, initialChatMessages));
@@ -1890,6 +1845,7 @@ function App() {
       setOffers(loadStoredArray<Offer>(OFFERS_STORAGE_KEY, initialOffers));
       setOrders(loadStoredArray<Order>(ORDERS_STORAGE_KEY, initialOrders));
       setReviews(loadStoredArray<BuyerReview>(REVIEWS_STORAGE_KEY, initialReviews));
+      setRegisteredUsers(loadStoredArray<User>(REGISTERED_USERS_STORAGE_KEY, []));
     };
 
     const handleStorageSync = (event: StorageEvent) => {
@@ -1899,7 +1855,8 @@ function App() {
         event.key === REQUESTS_STORAGE_KEY ||
         event.key === OFFERS_STORAGE_KEY ||
         event.key === ORDERS_STORAGE_KEY ||
-        event.key === REVIEWS_STORAGE_KEY
+        event.key === REVIEWS_STORAGE_KEY ||
+        event.key === REGISTERED_USERS_STORAGE_KEY
       ) {
         reloadChatStateFromStorage();
       }
@@ -1922,6 +1879,8 @@ function App() {
     };
   }, []);
 
+
+  const allUsers = useMemo(() => [...demoUsers, ...registeredUsers], [registeredUsers]);
 
   const filteredPublicProducts = useMemo(() => {
     const keyword = searchTerm.trim().toLowerCase();
@@ -1984,7 +1943,7 @@ function App() {
     const normalizedUsername = normalizeLoginUsername(username);
     const normalizedPassword = password?.trim() ?? "";
 
-    const usernameUser = demoUsers.find(
+    const usernameUser = allUsers.find(
       (user) => user.username.toLowerCase() === normalizedUsername
     );
 
@@ -1996,7 +1955,7 @@ function App() {
         return;
       }
 
-      nextUser = demoUsers.find((user) => user.role === "admin");
+      nextUser = allUsers.find((user) => user.role === "admin");
     } else if (usernameUser) {
       if (!normalizedPassword) {
         window.alert("กรุณากรอกรหัสผ่าน");
@@ -2016,6 +1975,43 @@ function App() {
     setLoginMode(null);
     setActiveMenu(nextUser.role === "admin" ? "ภาพรวมระบบ" : "แดชบอร์ด");
     setToast(`เข้าสู่ระบบเป็น ${nextUser.displayName}`);
+  };
+
+  const registerMember = (input: RegistrationInput) => {
+    const normalizedUsername = normalizeLoginUsername(input.username);
+    const normalizedPassword = input.password.trim();
+
+    if (!normalizedUsername || !normalizedPassword || !input.displayName.trim()) {
+      window.alert("กรุณากรอกชื่อผู้ใช้ รหัสผ่าน และชื่อสมาชิกให้ครบ");
+      return;
+    }
+
+    if (normalizedUsername === "useradmin" || allUsers.some((user) => user.username.toLowerCase() === normalizedUsername)) {
+      window.alert("ชื่อผู้ใช้นี้ถูกใช้แล้ว กรุณาใช้ชื่ออื่น");
+      return;
+    }
+
+    const newUser: User = {
+      id: `${input.role}_${Date.now()}`,
+      username: normalizedUsername,
+      displayName: input.displayName.trim(),
+      role: input.role,
+      province: input.province.trim() || "ยังไม่ระบุจังหวัด",
+      organizationType:
+        input.organizationType.trim() || (input.role === "seller" ? "เกษตรกร/ผู้ขายสินค้าเกษตร" : "ผู้ซื้อสินค้าเกษตร"),
+      verificationStatus: input.role === "seller" ? "pending_review" : "member",
+    };
+
+    setRegisteredUsers((current) => [newUser, ...current]);
+    setCurrentUser(newUser);
+    setIsAdminSession(false);
+    setLoginMode(null);
+    setActiveMenu("แดชบอร์ด");
+    setToast(
+      input.role === "seller"
+        ? `สมัครผู้ขาย/เกษตรกร ${newUser.displayName} แล้ว รอผู้ดูแลตรวจสอบข้อมูล`
+        : `สมัครผู้ซื้อ ${newUser.displayName} แล้ว`
+    );
   };
 
   const logout = () => {
@@ -2261,42 +2257,7 @@ function App() {
         poId: existingOrder.id,
         soId: existingSoId,
         created: false,
-        unitPrice: existingOrder.price,
       };
-    }
-
-    const threadMessages = chatMessages
-      .filter((message) => message.threadId === thread.id)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const latestBuyerAcceptedFormalOfferMessage = [...threadMessages]
-      .reverse()
-      .find(
-        (message) =>
-          message.senderRole === "buyer" &&
-          message.messageType === "user_message" &&
-          message.message.includes("ผู้ซื้อยืนยันข้อเสนอขายอย่างเป็นทางการ")
-      );
-
-    if (!latestBuyerAcceptedFormalOfferMessage) {
-      setToast("ต้องให้ผู้ซื้อยืนยันข้อเสนอขายอย่างเป็นทางการก่อนสร้าง PO/SO");
-      return null;
-    }
-
-    const latestSellerFormalOfferMessage = [...threadMessages]
-      .reverse()
-      .find(
-        (message) =>
-          message.senderRole === "seller" &&
-          message.messageType === "user_message" &&
-          message.createdAt < latestBuyerAcceptedFormalOfferMessage.createdAt &&
-          message.message.includes("ผู้ขายส่งข้อเสนอขายอย่างเป็นทางการ")
-      );
-
-    const agreedUnitPrice = extractFormalOfferUnitPrice(latestSellerFormalOfferMessage?.message);
-
-    if (!agreedUnitPrice) {
-      setToast("กรุณาให้ผู้ขายส่งข้อเสนอขายพร้อมราคาสุดท้ายเป็นตัวเลขเดียวก่อนสร้าง PO/SO");
-      return null;
     }
 
     const nextIndex = orders.length + 1;
@@ -2304,6 +2265,8 @@ function App() {
     const poId = `PO-2026-${documentNumber}`;
     const soId = `SO-2026-${documentNumber}`;
 
+    const firstPriceMatch = relatedRequest.targetPrice.match(/\d+(?:\.\d+)?/);
+    const inferredPrice = firstPriceMatch ? Number(firstPriceMatch[0]) : 0;
     const buyerName =
       demoUsers.find((user) => user.id === relatedRequest.buyerId)?.displayName || "ผู้ซื้อ";
     const sellerName = currentUser.displayName;
@@ -2318,8 +2281,8 @@ function App() {
       productName: relatedRequest.productName,
       buyerName,
       sellerName,
-      quantity: getQuantityForKgPrice(relatedRequest),
-      price: agreedUnitPrice,
+      quantity: relatedRequest.quantity,
+      price: inferredPrice,
       deliveryDate: relatedRequest.deliveryDate,
       status: "ยืนยันคำสั่งซื้อแล้ว / รอส่งมอบ",
       proofStatus: "รอผู้ขายอัปโหลดหลักฐานส่งมอบ",
@@ -2351,18 +2314,13 @@ function App() {
       )
     );
 
-    addAudit(
-      "สร้าง PO/SO จากแชท",
-      `${poId} / ${soId} สำหรับ ${relatedRequest.productName} ราคา ${agreedUnitPrice.toLocaleString("th-TH")} บาท/กก.`,
-      "ผู้ขาย/เกษตรกร"
-    );
+    addAudit("สร้าง PO/SO จากแชท", `${poId} / ${soId} สำหรับ ${relatedRequest.productName}`, "ผู้ขาย/เกษตรกร");
     setToast(`สร้าง PO/SO สำเร็จ: ${poId} / ${soId}`);
 
     return {
       poId,
       soId,
       created: true,
-      unitPrice: agreedUnitPrice,
     };
   };
 
@@ -2558,8 +2516,8 @@ function App() {
       return;
     }
 
-    if (orders.some((item) => item.salesOfferId === offer.id || item.requestId === offer.requestId)) {
-      setToast("ข้อเสนอนี้ออก PO/SO แล้ว");
+    if (orders.some((item) => item.salesOfferId === offer.id)) {
+      setToast("ข้อเสนอนี้ถูกเลือกและสร้างคำสั่งซื้อแล้ว");
       setActiveMenu("ดีล / คำสั่งซื้อของฉัน");
       return;
     }
@@ -2571,64 +2529,41 @@ function App() {
       return;
     }
 
-    if (offer.status === "กำลังเจรจาก่อนออก PO/SO") {
-      const existingNegotiationThread = getOrCreateChatThread({
-        threadType: "rfq",
-        rfqId: request.id,
-        productId: request.productId,
-        buyerId: currentUser.id,
-        sellerId: offer.sellerId,
-      });
-
-      setSelectedChatThread(existingNegotiationThread);
-      setActiveMenu("แชทการจัดซื้อ");
-      return;
-    }
-
-    const negotiationThread = getOrCreateChatThread({
-      threadType: "rfq",
-      rfqId: request.id,
-      productId: request.productId,
+    const newOrder: Order = {
+      id: `PO-2026-${String(orders.length + 1).padStart(4, "0")}`,
+      requestId: offer.requestId,
+      salesOfferId: offer.id,
       buyerId: currentUser.id,
       sellerId: offer.sellerId,
-    });
+      productName: request.productName,
+      buyerName: currentUser.displayName,
+      sellerName: offer.sellerName,
+      quantity: offer.quantity,
+      price: offer.price,
+      deliveryDate: offer.deliveryDate,
+      status: "ยืนยันแล้ว",
+      proofStatus: "ยังไม่ส่งหลักฐาน",
+    };
 
+    setOrders((current) => [newOrder, ...current]);
     setOffers((current) =>
       current.map((item) =>
         item.id === offer.id
-          ? { ...item, status: "กำลังเจรจาก่อนออก PO/SO" }
-        : item.requestId === offer.requestId
-          ? { ...item, status: "รอผลการเจรจา" }
+          ? { ...item, status: "ถูกเลือก" }
+          : item.requestId === offer.requestId
+          ? { ...item, status: "ไม่ถูกเลือก" }
           : item
       )
     );
     setRequests((current) =>
       current.map((item) =>
-        item.id === offer.requestId
-          ? { ...item, sellerId: offer.sellerId, status: "เจรจาราคาก่อนออก PO/SO" }
-          : item
+        item.id === offer.requestId ? { ...item, status: "สร้างคำสั่งซื้อแล้ว" } : item
       )
     );
 
-    sendChatMessage(
-      negotiationThread,
-      [
-        `ผู้ซื้อเลือกข้อเสนอ ${offer.id} เพื่อเจรจาราคาก่อนออก PO/SO`,
-        ``,
-        `ผู้ขาย: ${offer.sellerName}`,
-        `ราคาเสนอเริ่มต้น: ${offer.price.toLocaleString("th-TH")} บาท/กก.`,
-        `ปริมาณเสนอขาย: ${offer.quantity.toLocaleString("th-TH")} กก.`,
-        `วันส่งมอบที่เสนอ: ${offer.deliveryDate}`,
-        ``,
-        `ขั้นตอนถัดไป: ผู้ขายต้องส่งราคาสุดท้ายเป็นตัวเลขเดียวในแชท และผู้ซื้อยืนยันก่อน ระบบจึงจะสร้าง PO/SO ได้`,
-      ].join("\n"),
-      { skipRisk: true }
-    );
-
-    addAudit("เลือกข้อเสนอเพื่อเจรจาก่อนออก PO/SO", `${offer.id} จาก ${offer.sellerName}`, "ผู้ซื้อ");
-    setToast("เปิดแชทเจรจาราคาก่อนออก PO/SO แล้ว");
-    setSelectedChatThread(negotiationThread);
-    setActiveMenu("แชทการจัดซื้อ");
+    addAudit("เลือกข้อเสนอและสร้างคำสั่งซื้อ", `${newOrder.id} จาก ${offer.sellerName}`, "ผู้ซื้อ");
+    setToast("เลือกข้อเสนอสำเร็จ ระบบสร้างคำสั่งซื้อแล้ว");
+    setActiveMenu("ดีล / คำสั่งซื้อของฉัน");
   };
 
   const uploadDeliveryProof = () => {
@@ -2936,6 +2871,7 @@ function App() {
         onCategoryChange={setCategoryFilter}
         onLoginModeChange={setLoginMode}
         onLogin={chooseRole}
+        onRegister={registerMember}
       />
     );
   }
@@ -2943,37 +2879,19 @@ function App() {
   const currentMenus = menus[role];
 
   const menuBadgeCounts: Record<string, number> = {};
-  const isCurrentUserChatThread = (thread: ChatThread) =>
-    role === "buyer" ? thread.buyerId === currentUser.id : role === "seller" ? thread.sellerId === currentUser.id : false;
-  const isClosedChatThread = (thread: ChatThread) => {
-    if (thread.status === "closed") return true;
-
-    const threadMessages = chatMessages.filter((message) => message.threadId === thread.id);
-    const relatedRequest = requests.find((request) => request.id === thread.rfqId);
-    const relatedOrder = orders.find((order) => order.id === thread.orderId || order.requestId === thread.rfqId);
-    const workflowSteps = getWorkflowStepsForChat({
-      thread,
-      relatedRequest,
-      relatedOrder,
-      messages: threadMessages,
-    });
-
-    return workflowSteps.some((step) => step.key === "closed" && step.status === "completed");
-  };
-  const myChatThreadCount = chatThreads.filter(isCurrentUserChatThread).length;
-  const myActiveChatThreadCount = chatThreads.filter(
-    (thread) => isCurrentUserChatThread(thread) && !isClosedChatThread(thread)
+  const myChatThreadCount = chatThreads.filter((thread) =>
+    role === "buyer" ? thread.buyerId === currentUser.id : role === "seller" ? thread.sellerId === currentUser.id : false
   ).length;
 
   if (role === "buyer") {
-    menuBadgeCounts["แชทการจัดซื้อ"] = myActiveChatThreadCount;
+    menuBadgeCounts["แชทการจัดซื้อ"] = myChatThreadCount;
     menuBadgeCounts["ประวัติธุรกรรม"] =
       requests.filter((request) => request.buyerId === currentUser.id).length +
       orders.filter((order) => order.buyerId === currentUser.id).length;
   }
 
   if (role === "seller") {
-    menuBadgeCounts["แชทจากผู้ซื้อ"] = myActiveChatThreadCount;
+    menuBadgeCounts["แชทจากผู้ซื้อ"] = myChatThreadCount;
     menuBadgeCounts["ประวัติธุรกรรม"] =
       offers.filter((offer) => offer.sellerId === currentUser.id).length +
       orders.filter((order) => order.sellerId === currentUser.id).length;
@@ -3118,6 +3036,7 @@ function PublicCatalog({
   onCategoryChange,
   onLoginModeChange,
   onLogin,
+  onRegister,
 }: {
   products: PublicProduct[];
   searchTerm: string;
@@ -3127,19 +3046,53 @@ function PublicCatalog({
   onCategoryChange: (value: string) => void;
   onLoginModeChange: (value: LoginMode | null) => void;
   onLogin: (role: Role, adminSession?: boolean, username?: string, password?: string) => void;
+  onRegister: (input: RegistrationInput) => void;
 }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [authView, setAuthView] = useState<"login" | "register">("login");
+  const [registerRole, setRegisterRole] = useState<RegistrationInput["role"]>("buyer");
+  const [registerUsername, setRegisterUsername] = useState("");
+  const [registerPassword, setRegisterPassword] = useState("");
+  const [registerDisplayName, setRegisterDisplayName] = useState("");
+  const [registerProvince, setRegisterProvince] = useState("");
+  const [registerOrganizationType, setRegisterOrganizationType] = useState("");
   const [publicDetailProduct, setPublicDetailProduct] = useState<PublicProduct | null>(null);
 
-  const loginTitle = "เข้าสู่ระบบสมาชิก";
+  const loginTitle = loginMode === "buyerGate" ? "เข้าสู่ระบบเพื่อส่งคำขอซื้อ" : "เข้าสู่ระบบสมาชิก";
+  const authTitle = authView === "register" ? "สมัครสมาชิก FarmLink" : loginTitle;
 
-  const loginHelp =
-    "กรอกชื่อผู้ใช้และรหัสผ่าน ระบบจะตรวจสอบบทบาทของบัญชีและพาไปยังหน้าผู้ซื้อ ผู้ขาย หรือผู้ดูแลระบบโดยอัตโนมัติ";
+  const authHelp =
+    authView === "register"
+      ? "เลือกประเภทสมาชิก กรอกข้อมูลพื้นฐาน แล้วเริ่มใช้งาน prototype ได้ทันที"
+      : "กรอกชื่อผู้ใช้และรหัสผ่าน ระบบจะพาไปยังหน้าที่ตรงกับบัญชีของคุณโดยอัตโนมัติ";
 
   const isHiddenAdminLogin = username.trim().toLowerCase() === "useradmin" && password === "admin123";
 
   const loginRole: Role = "buyer";
+
+  const openLoginModal = () => {
+    setAuthView("login");
+    onLoginModeChange("buyer");
+  };
+
+  const openRegisterModal = (role: RegistrationInput["role"] = "buyer") => {
+    setAuthView("register");
+    setRegisterRole(role);
+    onLoginModeChange(role);
+  };
+
+  const handleRegistrationSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onRegister({
+      role: registerRole,
+      username: registerUsername,
+      password: registerPassword,
+      displayName: registerDisplayName,
+      province: registerProvince,
+      organizationType: registerOrganizationType,
+    });
+  };
 
   const categoryMenu = [
     { label: "ทั้งหมด", icon: "▦" },
@@ -3162,19 +3115,27 @@ function PublicCatalog({
             </span>
           </button>
 
-          <button
-            onClick={() => onLoginModeChange("buyer")}
-            className="rounded-xl border border-[#D8E4DC] bg-white px-4 py-2.5 text-sm font-semibold text-[#10251B] shadow-sm transition hover:border-[#2B7554] hover:text-[#2B7554]"
-          >
-            เข้าสู่ระบบสมาชิก
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={openLoginModal}
+              className="rounded-xl border border-[#D8E4DC] bg-white px-4 py-2.5 text-sm font-semibold text-[#10251B] shadow-sm transition hover:border-[#2B7554] hover:text-[#2B7554]"
+            >
+              เข้าสู่ระบบสมาชิก
+            </button>
+            <button
+              onClick={() => openRegisterModal("buyer")}
+              className="rounded-xl bg-[#2B7554] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1F6044]"
+            >
+              สมัครสมาชิก
+            </button>
+          </div>
         </div>
       </header>
 
       <section className="mx-auto max-w-7xl px-5 pb-10 pt-6">
         <div className="mx-auto max-w-4xl text-center">
           <p className="text-lg font-medium leading-relaxed text-[#4B6B5C]">
-            ระบบเชื่อมโยงผลผลิต ส่งตรงถึงธุรกิจคุณ — ค้นหา เปรียบเทียบ
+            ระบบจัดซอร์สสินค้าเกษตร B2B ตรวจสอบได้ — ค้นหา เปรียบเทียบ และส่งขอจากผู้ผลิตโดยตรง
           </p>
         </div>
 
@@ -3245,54 +3206,172 @@ function PublicCatalog({
 
       {loginMode ? (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/45 px-4">
-          <section className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+          <section className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-2xl font-bold text-[#0F172A]">{loginTitle}</h2>
-                <p className="mt-2 text-sm text-slate-600">{loginHelp}</p>
+                <h2 className="text-2xl font-bold text-[#0F172A]">{authTitle}</h2>
+                <p className="mt-2 text-sm text-slate-600">{authHelp}</p>
               </div>
               <button onClick={() => onLoginModeChange(null)} className="text-slate-400 hover:text-slate-700">
                 ปิด
               </button>
             </div>
 
-            <div className="mt-5 space-y-3">
-              <label className="block text-sm font-medium text-slate-700">
-                ชื่อผู้ใช้
-                <input
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                  placeholder="ชื่อผู้ใช้"
-                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
-                />
-              </label>
-              <label className="block text-sm font-medium text-slate-700">
-                รหัสผ่าน
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="รหัสผ่าน"
-                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
-                />
-              </label>
-            </div>
+            {authView === "login" ? (
+              <>
+                <div className="mt-5 space-y-3">
+                  <label className="block text-sm font-medium text-slate-700">
+                    ชื่อผู้ใช้
+                    <input
+                      value={username}
+                      onChange={(event) => setUsername(event.target.value)}
+                      placeholder="เช่น buyer_demo_01 หรือ seller_demo_01"
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
+                    />
+                  </label>
+                  <label className="block text-sm font-medium text-slate-700">
+                    รหัสผ่าน
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      placeholder="รหัสผ่าน"
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
+                    />
+                  </label>
+                </div>
 
-            <div className="mt-5 flex flex-col gap-2">
-              <button
-                onClick={() => onLogin(loginRole, isHiddenAdminLogin, username, password)}
-                className="rounded-md bg-[#0F8A5F] px-4 py-2 text-sm font-medium text-white"
-              >
-                เข้าสู่ระบบ
-              </button>
+                <div className="mt-5 flex flex-col gap-2">
+                  <button
+                    onClick={() => onLogin(loginRole, isHiddenAdminLogin, username, password)}
+                    className="rounded-md bg-[#0F8A5F] px-4 py-2 text-sm font-medium text-white"
+                  >
+                    เข้าสู่ระบบ
+                  </button>
 
-              <button
-                onClick={() => onLoginModeChange(null)}
-                className="rounded-md border border-[#DDE7E3] px-4 py-2 text-sm font-medium text-slate-700"
-              >
-                กลับไปดูสินค้า
-              </button>
-            </div>
+                  <div className="rounded-xl border border-[#DDE7E3] bg-[#F8FBF9] p-3">
+                    <p className="text-sm font-semibold text-[#10251B]">ยังไม่มีบัญชี?</p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => openRegisterModal("buyer")}
+                        className="rounded-md border border-[#2B7554] bg-white px-3 py-2 text-sm font-medium text-[#2B7554]"
+                      >
+                        สมัครผู้ซื้อ
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openRegisterModal("seller")}
+                        className="rounded-md border border-[#2B7554] bg-white px-3 py-2 text-sm font-medium text-[#2B7554]"
+                      >
+                        สมัครผู้ขาย/เกษตรกร
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => onLoginModeChange(null)}
+                    className="rounded-md border border-[#DDE7E3] px-4 py-2 text-sm font-medium text-slate-700"
+                  >
+                    กลับไปดูสินค้า
+                  </button>
+                </div>
+              </>
+            ) : (
+              <form onSubmit={handleRegistrationSubmit} className="mt-5 space-y-4">
+                <div>
+                  <p className="text-sm font-medium text-slate-700">ประเภทสมาชิก</p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    {(["buyer", "seller"] as RegistrationInput["role"][]).map((roleOption) => (
+                      <button
+                        key={roleOption}
+                        type="button"
+                        onClick={() => setRegisterRole(roleOption)}
+                        className={`rounded-md border px-3 py-2 text-sm font-semibold ${
+                          registerRole === roleOption
+                            ? "border-[#2B7554] bg-[#2B7554] text-white"
+                            : "border-[#DDE7E3] bg-white text-slate-700"
+                        }`}
+                      >
+                        {roleOption === "buyer" ? "ผู้ซื้อ" : "ผู้ขาย/เกษตรกร"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <label className="block text-sm font-medium text-slate-700">
+                  {registerRole === "seller" ? "ชื่อฟาร์ม / กลุ่ม / ร้านค้า" : "ชื่อผู้ซื้อ / องค์กร"}
+                  <input
+                    value={registerDisplayName}
+                    onChange={(event) => setRegisterDisplayName(event.target.value)}
+                    placeholder={registerRole === "seller" ? "เช่น ไร่สุขใจ แม่ริม" : "เช่น ร้านอาหารบ้านสวน"}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
+                  />
+                </label>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="block text-sm font-medium text-slate-700">
+                    จังหวัด
+                    <input
+                      value={registerProvince}
+                      onChange={(event) => setRegisterProvince(event.target.value)}
+                      placeholder="เช่น เชียงใหม่"
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
+                    />
+                  </label>
+                  <label className="block text-sm font-medium text-slate-700">
+                    ประเภทองค์กร
+                    <input
+                      value={registerOrganizationType}
+                      onChange={(event) => setRegisterOrganizationType(event.target.value)}
+                      placeholder={registerRole === "seller" ? "เกษตรกร / สหกรณ์" : "ร้านอาหาร / โรงแรม"}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
+                    />
+                  </label>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="block text-sm font-medium text-slate-700">
+                    ชื่อผู้ใช้
+                    <input
+                      value={registerUsername}
+                      onChange={(event) => setRegisterUsername(event.target.value)}
+                      placeholder="ตั้งชื่อผู้ใช้"
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
+                    />
+                  </label>
+                  <label className="block text-sm font-medium text-slate-700">
+                    รหัสผ่าน
+                    <input
+                      type="password"
+                      value={registerPassword}
+                      onChange={(event) => setRegisterPassword(event.target.value)}
+                      placeholder="ตั้งรหัสผ่าน"
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
+                    />
+                  </label>
+                </div>
+
+                {registerRole === "seller" ? (
+                  <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
+                    ผู้ขายที่สมัครใหม่จะแสดงสถานะรอตรวจสอบ เพื่อให้ผู้ดูแลระบบอนุมัติก่อนใช้งานจริง
+                  </p>
+                ) : null}
+
+                <div className="flex flex-col gap-2">
+                  <button type="submit" className="rounded-md bg-[#0F8A5F] px-4 py-2 text-sm font-medium text-white">
+                    สมัครและเข้าสู่ระบบ
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAuthView("login")}
+                    className="rounded-md border border-[#DDE7E3] px-4 py-2 text-sm font-medium text-slate-700"
+                  >
+                    กลับไปเข้าสู่ระบบ
+                  </button>
+                </div>
+              </form>
+            )}
           </section>
         </div>
       ) : null}
@@ -3606,7 +3685,7 @@ function RoleContent({
   createPoSoFromChat: (
     thread: ChatThread,
     request?: PurchaseRequest
-  ) => { poId: string; soId: string; created: boolean; unitPrice?: number } | null;
+  ) => { poId: string; soId: string; created: boolean } | null;
   createDemoRequest: () => void;
   createPurchaseRequestFromProduct: (product: PublicProduct, form: PurchaseRequestFormState) => void;
   submitDemoOffer: (requestId: string) => void;
@@ -3650,86 +3729,9 @@ function RoleContent({
     return fallbackStatus || "เปิดรับข้อเสนอ";
   };
 
-  const getChatThreadWorkflowStatus = (
-    thread: ChatThread,
-    relatedRequestOverride?: PurchaseRequest,
-    relatedOrderOverride?: Order
-  ) => {
-    const relatedRequest = relatedRequestOverride || requests.find((request) => request.id === thread.rfqId);
-    const relatedOrder =
-      relatedOrderOverride ||
-      orders.find((order) => order.id === thread.orderId || order.requestId === thread.rfqId);
-    const threadMessages = chatMessages.filter((message) => message.threadId === thread.id);
-    const sortedThreadMessages = [...threadMessages].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const newestFirstMessages = [...sortedThreadMessages].reverse();
-
-    const latestBuyerPriceNegotiationMessage = newestFirstMessages.find(
-      (message) =>
-        message.senderRole === "buyer" &&
-        message.messageType === "user_message" &&
-        isBuyerPriceNegotiationMessage(message.message)
-    );
-
-    const latestSellerFormalOfferAfterPriceNegotiation = latestBuyerPriceNegotiationMessage
-      ? newestFirstMessages.find(
-          (message) =>
-            message.senderRole === "seller" &&
-            message.messageType === "user_message" &&
-            message.createdAt > latestBuyerPriceNegotiationMessage.createdAt &&
-            message.message.includes("ผู้ขายส่งข้อเสนอขายอย่างเป็นทางการ") &&
-            Boolean(extractFormalOfferUnitPrice(message.message))
-        )
-      : undefined;
-
-    const latestBuyerAcceptedAfterLatestSellerOffer = latestSellerFormalOfferAfterPriceNegotiation
-      ? newestFirstMessages.find(
-          (message) =>
-            message.senderRole === "buyer" &&
-            message.messageType === "user_message" &&
-            message.createdAt > latestSellerFormalOfferAfterPriceNegotiation.createdAt &&
-            message.message.includes("ผู้ซื้อยืนยันข้อเสนอขายอย่างเป็นทางการ")
-        )
-      : undefined;
-
-    const latestPoSoAfterLatestSellerOffer = latestSellerFormalOfferAfterPriceNegotiation
-      ? newestFirstMessages.find(
-          (message) =>
-            message.messageType === "user_message" &&
-            message.createdAt > latestSellerFormalOfferAfterPriceNegotiation.createdAt &&
-            (message.message.includes("ผู้ขายยืนยันรับคำสั่งซื้อและระบบสร้าง PO / SO") ||
-              message.message.includes("PO ฝั่งผู้ซื้อ:") ||
-              message.message.includes("SO ฝั่งผู้ขาย:") ||
-              message.message.includes("ระบบสร้าง PO / SO แล้ว"))
-        )
-      : undefined;
-
-    if (latestBuyerPriceNegotiationMessage && !latestSellerFormalOfferAfterPriceNegotiation) {
-      return "รอผู้ขายยืนยันราคาใหม่";
-    }
-
-    if (
-      latestSellerFormalOfferAfterPriceNegotiation &&
-      !latestBuyerAcceptedAfterLatestSellerOffer &&
-      !latestPoSoAfterLatestSellerOffer
-    ) {
-      return "รอผู้ซื้อยืนยันราคาใหม่";
-    }
-
-    const steps = getWorkflowStepsForChat({
-      thread,
-      relatedRequest,
-      relatedOrder,
-      messages: threadMessages,
-    });
-
-    return getTransactionStatusFromWorkflow(steps, relatedOrder?.status || relatedRequest?.status);
-  };
-
   const getRequestStatusFromChat = (request: PurchaseRequest) => {
     const thread = chatThreads.find((item) => item.rfqId === request.id);
     const relatedOrder = orders.find((order) => order.requestId === request.id);
-
-    if (thread) return getChatThreadWorkflowStatus(thread, request, relatedOrder);
 
     if (!thread && !relatedOrder) return request.status;
 
@@ -3761,23 +3763,15 @@ function RoleContent({
     if (!thread) return order.status;
 
     const relatedRequest = requests.find((request) => request.id === order.requestId);
-    return getChatThreadWorkflowStatus(thread, relatedRequest, order);
-  };
+    const threadMessages = chatMessages.filter((message) => message.threadId === thread.id);
+    const steps = getWorkflowStepsForChat({
+      thread,
+      relatedRequest,
+      relatedOrder: order,
+      messages: threadMessages,
+    });
 
-  const getOfferStatusFromChat = (offer: Offer) => {
-    const relatedRequest = requests.find((request) => request.id === offer.requestId);
-    const relatedOrder = orders.find(
-      (order) => order.salesOfferId === offer.id || order.requestId === offer.requestId
-    );
-    const thread = chatThreads.find(
-      (item) => item.rfqId === offer.requestId || Boolean(relatedOrder?.id && item.orderId === relatedOrder.id)
-    );
-
-    if (thread) return getChatThreadWorkflowStatus(thread, relatedRequest, relatedOrder);
-    if (relatedOrder) return getOrderStatusFromChat(relatedOrder);
-    if (relatedRequest) return getRequestStatusFromChat(relatedRequest);
-
-    return offer.status;
+    return getTransactionStatusFromWorkflow(steps, order.status);
   };
 
   const extractTradeDocumentIdsFromChat = (thread: ChatThread) => {
@@ -3873,11 +3867,6 @@ function RoleContent({
   const myBuyerRequestsForHistory = myBuyerRequests.map((request) => ({
     ...request,
     status: getRequestStatusFromChat(request),
-  }));
-
-  const mySellerOffersForHistory = mySellerOffers.map((offer) => ({
-    ...offer,
-    status: getOfferStatusFromChat(offer),
   }));
 
   const myBuyerOrdersForHistory = mergeUniqueOrders(
@@ -4016,7 +4005,6 @@ function RoleContent({
             currentUser={currentUser}
             requests={requests}
             orders={orders}
-            getThreadStatus={getChatThreadWorkflowStatus}
             onOpen={setSelectedChatThread}
           />
 
@@ -4047,7 +4035,7 @@ function RoleContent({
       return (
         <>
           <OrdersTable
-            orders={myBuyerOrdersForHistory}
+            orders={myBuyerOrders}
             confirmDelivery={confirmDelivery}
             currentUser={currentUser}
             reviews={reviews}
@@ -4127,7 +4115,7 @@ function RoleContent({
         <div className="grid gap-4 md:grid-cols-3">
           <StatCard title="ห้องแชทการจัดซื้อ" value={myChatThreads.length} detail="ใช้เป็นศูนย์กลางการทำธุรกรรม" />
           <StatCard title="คำขอซื้อของฉัน" value={myBuyerRequests.length} />
-          <StatCard title="ดีล / คำสั่งซื้อ" value={myBuyerOrdersForHistory.length} />
+          <StatCard title="ดีล / คำสั่งซื้อ" value={myBuyerOrders.length} />
         </div>
 
         <ChatThreadList
@@ -4137,7 +4125,6 @@ function RoleContent({
           currentUser={currentUser}
           requests={requests}
           orders={orders}
-          getThreadStatus={getChatThreadWorkflowStatus}
           onOpen={setSelectedChatThread}
         />
 
@@ -4217,7 +4204,6 @@ function RoleContent({
             currentUser={currentUser}
             requests={requests}
             orders={orders}
-            getThreadStatus={getChatThreadWorkflowStatus}
             onOpen={setSelectedChatThread}
           />
 
@@ -4244,7 +4230,7 @@ function RoleContent({
       return (
         <>
           <SellerOffersTable
-            offers={mySellerOffersForHistory}
+            offers={mySellerOffers}
             requests={requests}
             onOpenChat={(request) => openRequestChat(request)}
           />
@@ -4271,7 +4257,7 @@ function RoleContent({
     if (activeMenu === "ดีล / คำสั่งซื้อของฉัน" || activeMenu === "คำสั่งซื้อของฉัน") {
       return (
         <>
-          <OrdersTable orders={mySellerOrdersForHistory} onOpenChat={openOrderChat} />
+          <OrdersTable orders={mySellerOrders} onOpenChat={openOrderChat} />
 
           {selectedChatThread ? (
             <ChatModal
@@ -4326,7 +4312,7 @@ function RoleContent({
     if (activeMenu === "ประวัติธุรกรรม") {
       return (
         <>
-          <SellerOffersTable offers={mySellerOffersForHistory} />
+          <SellerOffersTable offers={mySellerOffers} />
           <OrdersTable orders={mySellerOrdersForHistory} />
         </>
       );
@@ -4360,7 +4346,7 @@ function RoleContent({
         <div className="grid gap-4 md:grid-cols-4">
           <StatCard title="สินค้าของฉัน" value={mySellerProducts.length} detail="เฉพาะ sellerId ของฉัน" />
           <StatCard title="แชทจากผู้ซื้อ" value={myChatThreads.length} detail="ใช้เป็นศูนย์กลางการทำธุรกรรม" />
-          <StatCard title="ดีล / คำสั่งซื้อ" value={mySellerOrdersForHistory.length} />
+          <StatCard title="ดีล / คำสั่งซื้อ" value={mySellerOrders.length} />
           <StatCard title="คะแนนความน่าเชื่อถือ" value="86" detail={currentUser.verificationStatus || "รอตรวจสอบ"} />
         </div>
 
@@ -4371,7 +4357,6 @@ function RoleContent({
           currentUser={currentUser}
           requests={requests}
           orders={orders}
-          getThreadStatus={getChatThreadWorkflowStatus}
           onOpen={setSelectedChatThread}
         />
 
@@ -4485,7 +4470,6 @@ function RoleContent({
           currentUser={currentUser}
           requests={requests}
           orders={orders}
-          getThreadStatus={getChatThreadWorkflowStatus}
           onOpen={setSelectedChatThread}
           adminMode
         />
@@ -5808,7 +5792,6 @@ function ChatThreadList({
   requests,
   orders,
   onOpen,
-  getThreadStatus,
   adminMode,
 }: {
   title: string;
@@ -5818,7 +5801,6 @@ function ChatThreadList({
   requests: PurchaseRequest[];
   orders: Order[];
   onOpen: (thread: ChatThread) => void;
-  getThreadStatus?: (thread: ChatThread) => string;
   adminMode?: boolean;
 }) {
   return (
@@ -5851,7 +5833,6 @@ function ChatThreadList({
               relatedRequest?.productName ||
               relatedOrder?.productName ||
               (thread.threadType === "rfq" ? "คำขอซื้อ" : "คำสั่งซื้อ");
-            const threadWorkflowStatus = getThreadStatus?.(thread) || "เปิดแชท";
 
             return (
               <div key={thread.id} className="rounded-lg border border-[#DDE7E3] p-4">
@@ -5859,8 +5840,7 @@ function ChatThreadList({
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="font-bold text-[#0F172A]">{titleText}</p>
-                      <StatusBadge value={threadWorkflowStatus} />
-                      {thread.status === "flagged" ? <StatusBadge value="แชทมีความเสี่ยง" /> : null}
+                      <StatusBadge value={thread.status === "flagged" ? "แชทมีความเสี่ยง" : "เปิดแชท"} />
                       {unreadCount > 0 ? (
                         <span className="rounded-full bg-[#0F8A5F] px-2.5 py-1 text-xs font-bold text-white">
                           ยังไม่อ่าน {unreadCount}
@@ -6069,7 +6049,7 @@ function ChatModal({
   onCreatePoSo?: (
     thread: ChatThread,
     request?: PurchaseRequest
-  ) => { poId: string; soId: string; created: boolean; unitPrice?: number } | null;
+  ) => { poId: string; soId: string; created: boolean } | null;
   onSubmitChatReview?: (order: Order, form: ReviewFormState) => void;
   onClose: () => void;
 }) {
@@ -6269,15 +6249,6 @@ function ChatModal({
         item.message.includes("ผู้ซื้อขอแก้ไขข้อเสนอขายอย่างเป็นทางการ")
     );
 
-  const latestBuyerPriceNegotiationMessage = [...sortedMessages]
-    .reverse()
-    .find(
-      (item) =>
-        item.senderRole === "buyer" &&
-        item.messageType === "user_message" &&
-        isBuyerPriceNegotiationMessage(item.message)
-    );
-
   const latestBuyerAcceptedFormalOfferMessage = [...sortedMessages]
     .reverse()
     .find(
@@ -6295,48 +6266,6 @@ function ChatModal({
         item.messageType === "user_message" &&
         item.message.includes("ผู้ขายส่งข้อเสนอขายอย่างเป็นทางการ")
     );
-
-  const latestSellerFormalOfferAfterLatestPriceNegotiation = latestBuyerPriceNegotiationMessage
-    ? [...sortedMessages]
-        .reverse()
-        .find(
-          (item) =>
-            item.senderRole === "seller" &&
-            item.messageType === "user_message" &&
-            item.createdAt > latestBuyerPriceNegotiationMessage.createdAt &&
-            item.message.includes("ผู้ขายส่งข้อเสนอขายอย่างเป็นทางการ") &&
-            Boolean(extractFormalOfferUnitPrice(item.message))
-        )
-    : undefined;
-
-  const latestBuyerAcceptedFormalOfferAfterLatestPriceNegotiation =
-    latestSellerFormalOfferAfterLatestPriceNegotiation
-      ? [...sortedMessages]
-          .reverse()
-          .find(
-            (item) =>
-              item.senderRole === "buyer" &&
-              item.messageType === "user_message" &&
-              item.createdAt > latestSellerFormalOfferAfterLatestPriceNegotiation.createdAt &&
-              item.message.includes("ผู้ซื้อยืนยันข้อเสนอขายอย่างเป็นทางการ")
-          )
-      : undefined;
-
-  const sellerMustConfirmLatestBuyerPrice =
-    Boolean(latestBuyerPriceNegotiationMessage) &&
-    !latestSellerFormalOfferAfterLatestPriceNegotiation;
-  const isPriceNegotiationPending =
-    Boolean(latestBuyerPriceNegotiationMessage) &&
-    !latestBuyerAcceptedFormalOfferAfterLatestPriceNegotiation;
-  const latestBuyerMessageNeedsPriceConfirmation =
-    currentUser.role === "seller" &&
-    Boolean(latestBuyerMessage) &&
-    isBuyerPriceNegotiationMessage(latestBuyerMessage?.message) &&
-    !latestSellerFormalOfferAfterLatestPriceNegotiation;
-  const priceNegotiationBlocksNextSellerAction =
-    sellerMustConfirmLatestBuyerPrice ||
-    isPriceNegotiationPending ||
-    latestBuyerMessageNeedsPriceConfirmation;
 
   const sellerHasSentFormalOfferAfterBuyerAccepted = latestBuyerTermsAcceptedMessage
     ? sortedMessages.some(
@@ -6361,8 +6290,7 @@ function ChatModal({
   const shouldShowSellerFormalOfferActionCard =
     currentUser.role === "seller" &&
     Boolean(relatedRequest) &&
-    (priceNegotiationBlocksNextSellerAction ||
-      (Boolean(latestBuyerTermsAcceptedMessage) && !sellerHasSentFormalOfferAfterBuyerAccepted) ||
+    ((Boolean(latestBuyerTermsAcceptedMessage) && !sellerHasSentFormalOfferAfterBuyerAccepted) ||
       (Boolean(latestBuyerFormalOfferRevisionMessage) && !sellerHasSentFormalOfferAfterLatestRevision));
 
   const buyerHasRespondedToLatestFormalOffer = latestSellerFormalOfferMessage
@@ -6372,7 +6300,6 @@ function ChatModal({
           item.messageType === "user_message" &&
           item.createdAt > latestSellerFormalOfferMessage.createdAt &&
           (item.message.includes("ผู้ซื้อยืนยันข้อเสนอขายอย่างเป็นทางการ") ||
-            item.message.includes("ผู้ซื้อขอแก้ไขเงื่อนไข") ||
             item.message.includes("ผู้ซื้อขอแก้ไขข้อเสนอขายอย่างเป็นทางการ") ||
             item.message.includes("ผู้ซื้อยกเลิกข้อเสนอขายอย่างเป็นทางการ"))
       )
@@ -6401,7 +6328,6 @@ function ChatModal({
     currentUser.role === "seller" &&
     Boolean(relatedRequest) &&
     Boolean(latestBuyerAcceptedFormalOfferMessage) &&
-    !priceNegotiationBlocksNextSellerAction &&
     !sellerHasCreatedPoSoInChatAfterBuyerAccepted;
 
   const latestPoSoCreatedMessage = [...sortedMessages]
@@ -6549,7 +6475,6 @@ function ChatModal({
   const shouldShowSellerPaymentInstructionCard =
     currentUser.role === "seller" &&
     Boolean(latestBuyerConfirmedDeliveryMessage) &&
-    !priceNegotiationBlocksNextSellerAction &&
     !latestSellerPaymentInstructionMessage &&
     !latestBuyerDeliveryIssueMessage;
 
@@ -6561,7 +6486,6 @@ function ChatModal({
   const shouldShowSellerConfirmPaymentCard =
     currentUser.role === "seller" &&
     Boolean(latestBuyerPaymentProofMessage) &&
-    !priceNegotiationBlocksNextSellerAction &&
     !latestSellerPaymentConfirmedMessage;
 
   const shouldShowBuyerReceiveGoodsCard =
@@ -6573,7 +6497,6 @@ function ChatModal({
   const shouldShowSellerDeliveryActionCard =
     currentUser.role === "seller" &&
     Boolean(latestPoSoCreatedMessage) &&
-    !priceNegotiationBlocksNextSellerAction &&
     !shouldShowSellerAfterBuyerAcceptedOfferActionCard &&
     !latestBuyerDeliveryProofAcceptedIsAfterCorrection &&
     (!sellerHasSentDeliveryPlanAfterPoSo ||
@@ -7130,29 +7053,17 @@ function ChatModal({
   };
 
   const sendSellerFormalOffer = () => {
-    const agreedUnitPrice = extractSingleUnitPrice(formalOffer.pricePerUnit);
-
-    if (!agreedUnitPrice) {
-      alert("กรุณาระบุราคาสุดท้ายเป็นตัวเลขเดียว เช่น 60 บาท/กก. ก่อนส่งข้อเสนอขาย");
-      return;
-    }
-
-    const totalLabel = relatedRequest
-      ? formatBahtAmount(getQuantityForKgPrice(relatedRequest) * agreedUnitPrice)
-      : "คำนวณหลังสร้างคำสั่งซื้อ";
-
     const reply = [
       `ผู้ขายส่งข้อเสนอขายอย่างเป็นทางการสำหรับ ${relatedRequest?.productName || "คำขอซื้อ"}`,
       ``,
       `ปริมาณเสนอขาย: ${formalOffer.quantity}`,
-      `ราคาที่ตกลงสุดท้าย: ${agreedUnitPrice.toLocaleString("th-TH")} บาท/กก.`,
-      `มูลค่ารวมก่อนออก PO/SO: ${totalLabel}`,
+      `ราคาเสนอ: ${formalOffer.pricePerUnit}`,
       `ค่าขนส่ง: ${formalOffer.shippingCost}`,
       `วันส่งมอบ: ${formalOffer.deliveryDate}`,
       `เงื่อนไขชำระเงิน: ${formalOffer.paymentTerms}`,
       formalOffer.note ? `หมายเหตุ: ${formalOffer.note}` : "",
       ``,
-      `ขั้นตอนถัดไป: ผู้ซื้อสามารถยืนยันราคาสุดท้ายและข้อเสนอนี้ เพื่อให้ผู้ขายสร้าง PO/SO อย่างเป็นทางการ`,
+      `ขั้นตอนถัดไป: ผู้ซื้อสามารถยืนยันข้อเสนอเพื่อให้ระบบสร้างคำสั่งซื้ออย่างเป็นทางการ`,
     ]
       .filter(Boolean)
       .join("\n");
@@ -7162,24 +7073,11 @@ function ChatModal({
   };
 
   const sendBuyerAcceptFormalOffer = () => {
-    const agreedUnitPrice = extractFormalOfferUnitPrice(latestSellerFormalOfferMessage?.message);
-
-    if (!agreedUnitPrice) {
-      alert("ข้อเสนอขายยังไม่มีราคาสุดท้ายเป็นตัวเลขเดียว กรุณาขอให้ผู้ขายส่งข้อเสนอใหม่ก่อนยืนยัน");
-      return;
-    }
-
-    const totalLabel = relatedRequest
-      ? formatBahtAmount(getQuantityForKgPrice(relatedRequest) * agreedUnitPrice)
-      : "คำนวณหลังสร้างคำสั่งซื้อ";
-
     const reply = [
       `ผู้ซื้อยืนยันข้อเสนอขายอย่างเป็นทางการสำหรับ ${relatedRequest?.productName || "คำขอซื้อ"}`,
       ``,
-      `ยืนยันราคาสุดท้าย: ${agreedUnitPrice.toLocaleString("th-TH")} บาท/กก.`,
-      `มูลค่ารวมก่อนออก PO/SO: ${totalLabel}`,
       `ยืนยันตามข้อเสนอขายอย่างเป็นทางการที่ผู้ขายส่งมา`,
-      `ขั้นตอนถัดไป: ผู้ขายรับทราบการยืนยันข้อเสนอ แล้วระบบจะเข้าสู่ขั้นตอนสร้าง PO/SO เพื่อบันทึกข้อตกลงเรื่องราคา ปริมาณ ขนส่ง วันส่งมอบ และเงื่อนไขชำระเงิน`,
+      `ขั้นตอนถัดไป: ผู้ขายรับทราบการยืนยันข้อเสนอ แล้วระบบจะเข้าสู่ขั้นตอนสร้างคำสั่งซื้อเพื่อบันทึกข้อตกลงเรื่องราคา ปริมาณ ขนส่ง วันส่งมอบ และเงื่อนไขชำระเงิน`,
     ].join("\n");
 
     onSend(reply, { skipRisk: true });
@@ -7190,25 +7088,14 @@ function ChatModal({
   const sendSellerAcknowledgeBuyerAcceptedOffer = () => {
     const result = onCreatePoSo?.(thread, relatedRequest);
 
-    if (!result) return;
-
-    const poId = result.poId;
-    const soId = result.soId;
-    const agreedPriceLabel = result.unitPrice
-      ? `${result.unitPrice.toLocaleString("th-TH")} บาท/กก.`
-      : "ตามข้อเสนอขายที่ผู้ซื้อยืนยัน";
-    const totalLabel =
-      result.unitPrice && relatedRequest
-        ? formatBahtAmount(getQuantityForKgPrice(relatedRequest) * result.unitPrice)
-        : "ตามยอด PO/SO";
+    const poId = result?.poId || "PO-รอสร้าง";
+    const soId = result?.soId || "SO-รอสร้าง";
 
     const reply = [
       `ผู้ขายยืนยันรับคำสั่งซื้อและระบบสร้าง PO / SO สำหรับ ${relatedRequest?.productName || "คำขอซื้อ"}`,
       ``,
       `PO ฝั่งผู้ซื้อ: ${poId}`,
       `SO ฝั่งผู้ขาย: ${soId}`,
-      `ราคาที่ตกลงสุดท้าย: ${agreedPriceLabel}`,
-      `มูลค่ารวม: ${totalLabel}`,
       `คลิกหมายเลข PO หรือ SO ในแชทเพื่อเปิดดูรายละเอียดเอกสาร`,
       ``,
       `ข้อตกลงเรื่องสินค้า ราคา ปริมาณ ขนส่ง วันส่งมอบ และเงื่อนไขชำระเงินถูกบันทึกในระบบแล้ว`,
@@ -8140,7 +8027,7 @@ function ChatModal({
                     <div>
                       <p className="text-sm font-bold text-amber-900">FarmLink Action Card สำหรับผู้ขาย</p>
                       <p className="mt-1 text-xs text-amber-700">
-                        ผู้ซื้อยืนยันราคาสุดท้ายและข้อเสนอขายอย่างเป็นทางการแล้ว ขั้นตอนถัดไปของผู้ขายคือยืนยันรับคำสั่งซื้อ
+                        ผู้ซื้อยืนยันข้อเสนอขายอย่างเป็นทางการแล้ว ขั้นตอนถัดไปของผู้ขายคือยืนยันรับคำสั่งซื้อ
                         เพื่อให้ระบบสร้าง PO ฝั่งผู้ซื้อ และ SO ฝั่งผู้ขายอย่างเป็นทางการ
                       </p>
                     </div>
@@ -8150,7 +8037,7 @@ function ChatModal({
                   </div>
 
                   <div className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-900">
-                    <p className="font-bold">สถานะล่าสุด: ผู้ซื้อยืนยันราคาสุดท้ายแล้ว</p>
+                    <p className="font-bold">สถานะล่าสุด: ผู้ซื้อยืนยันข้อเสนอแล้ว</p>
                     <p className="mt-1">
                       เมื่อผู้ขายกดยืนยัน ระบบจะสร้าง PO / SO บันทึกข้อตกลงหลัก และเข้าสู่ขั้นตอนเปิดข้อมูลขนส่งกับหลักฐานส่งมอบ
                     </p>
@@ -8557,24 +8444,13 @@ function ChatModal({
                     <div>
                       <p className="text-sm font-bold text-emerald-900">FarmLink Action Card สำหรับผู้ขาย</p>
                       <p className="mt-1 text-xs text-[#06603F]">
-                        {priceNegotiationBlocksNextSellerAction
-                          ? "ผู้ซื้อขอแก้ไขราคา ต้องให้ผู้ขายยืนยันราคาสุดท้ายกลับมาก่อน ระบบจึงจะแสดงขั้นตอนถัดไป"
-                          : "ผู้ซื้อยืนยันเงื่อนไขเบื้องต้นแล้ว ขั้นตอนถัดไปคือผู้ขายส่งข้อเสนอขายอย่างเป็นทางการ เพื่อให้ผู้ซื้อยืนยันเป็นคำสั่งซื้อ"}
+                        ผู้ซื้อยืนยันเงื่อนไขเบื้องต้นแล้ว ขั้นตอนถัดไปคือผู้ขายส่งข้อเสนอขายอย่างเป็นทางการ เพื่อให้ผู้ซื้อยืนยันเป็นคำสั่งซื้อ
                       </p>
                     </div>
                     <span className="rounded-full bg-[#D1FAE5] px-3 py-1 text-xs font-medium text-emerald-800">
                       เห็นเฉพาะผู้ขาย
                     </span>
                   </div>
-
-                  {priceNegotiationBlocksNextSellerAction ? (
-                    <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-                      <p className="font-bold">รอผู้ขายยืนยันราคาใหม่จากผู้ซื้อ</p>
-                      <p className="mt-1">
-                        กรุณาตอบกลับด้วยราคาสุดท้ายเป็นตัวเลขเดียว เช่น 40 บาท/กก. เพื่อให้ผู้ซื้อยืนยันก่อนออก PO/SO
-                      </p>
-                    </div>
-                  ) : null}
 
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
                     <label className="block text-xs font-medium text-slate-700">
@@ -8587,16 +8463,13 @@ function ChatModal({
                     </label>
 
                     <label className="block text-xs font-medium text-slate-700">
-                      ราคาสุดท้ายที่ตกลงก่อนออก PO/SO
+                      ราคาเสนอ
                       <input
                         value={formalOffer.pricePerUnit}
                         onChange={(event) => updateFormalOffer("pricePerUnit", event.target.value)}
                         placeholder="เช่น 60 บาท/กก."
                         className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
                       />
-                      <span className="mt-1 block text-[11px] text-slate-500">
-                        ต้องเป็นตัวเลขเดียวหลังเจรจาแล้ว เช่น 60 บาท/กก. ไม่ใช่ช่วงราคา
-                      </span>
                     </label>
 
                     <label className="block text-xs font-medium text-slate-700">
@@ -8643,7 +8516,7 @@ function ChatModal({
                       onClick={sendSellerFormalOffer}
                       className="rounded-md bg-[#0F8A5F] px-4 py-2 text-sm font-medium text-white"
                     >
-                      ส่งราคาสุดท้ายให้ผู้ซื้อยืนยัน
+                      ส่งข้อเสนอขายอย่างเป็นทางการ
                     </button>
                   </div>
                 </div>
@@ -8657,7 +8530,7 @@ function ChatModal({
                     <div>
                       <p className="text-sm font-bold text-blue-900">FarmLink Action Card สำหรับผู้ซื้อ</p>
                       <p className="mt-1 text-xs text-blue-700">
-                        ผู้ขายส่งราคาสุดท้ายและข้อเสนอขายอย่างเป็นทางการแล้ว กรุณาตรวจสอบราคา ปริมาณ ค่าขนส่ง วันส่งมอบ และเงื่อนไขชำระเงินก่อนยืนยันเป็นคำสั่งซื้อ
+                        ผู้ขายส่งข้อเสนอขายอย่างเป็นทางการแล้ว กรุณาตรวจสอบราคา ปริมาณ ค่าขนส่ง วันส่งมอบ และเงื่อนไขชำระเงินก่อนยืนยันเป็นคำสั่งซื้อ
                       </p>
                     </div>
                     <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-800">
@@ -8738,7 +8611,7 @@ function ChatModal({
                         onClick={sendBuyerAcceptFormalOffer}
                         className="rounded-md bg-[#0F8A5F] px-4 py-2 text-sm font-medium text-white"
                       >
-                        ยืนยันราคาสุดท้าย
+                        ยืนยันข้อเสนอ
                       </button>
                       <button
                         type="button"
@@ -8758,7 +8631,7 @@ function ChatModal({
                   )}
 
                   <p className="mt-3 text-xs text-slate-500">
-                    เมื่อผู้ซื้อยืนยันราคาสุดท้ายแล้ว ผู้ขายจึงจะสร้าง PO/SO ได้ หากยังต้องต่อรองราคาให้กดขอแก้ไขข้อเสนอ
+                    เมื่อผู้ซื้อยืนยันข้อเสนอ ระบบจะเข้าสู่ขั้นตอนสร้างคำสั่งซื้ออย่างเป็นทางการ ก่อนเปิดข้อมูลขนส่งและขั้นตอนชำระเงิน
                   </p>
                 </div>
               </div>
@@ -8941,8 +8814,8 @@ function TradeDocumentModal({
     : relatedRequest?.targetPrice || "-";
   const totalLabel =
     relatedOrder && relatedOrder.price > 0
-      ? formatBahtAmount(relatedOrder.quantity * relatedOrder.price)
-      : getTradeDocumentTotalLabel(relatedRequest);
+      ? `${(relatedOrder.quantity * relatedOrder.price).toLocaleString("th-TH")} บาท`
+      : "คำนวณตามข้อเสนอที่ตกลง";
   const deliveryDate = relatedOrder?.deliveryDate || relatedRequest?.deliveryDate || "-";
   const deliveryLocation = relatedRequest?.deliveryLocation || "ระบุในคำขอซื้อ / ข้อมูลขนส่ง";
   const status = relatedOrder?.status || "สร้างเอกสารแล้ว / รอดำเนินการขั้นต่อไป";
@@ -8993,7 +8866,7 @@ function TradeDocumentModal({
             <DocumentInfoCard label="สินค้า" value={productName} />
             <DocumentInfoCard label="ปริมาณ" value={quantity} />
             <DocumentInfoCard label="ราคา / ช่วงราคา" value={priceLabel} />
-            <DocumentInfoCard label="มูลค่ารวม" value={totalLabel} />
+            <DocumentInfoCard label="มูลค่าประมาณ" value={totalLabel} />
             <DocumentInfoCard label="วันส่งมอบ" value={deliveryDate} />
             <DocumentInfoCard label="สถานที่ส่งมอบ" value={deliveryLocation} />
           </div>
@@ -9144,9 +9017,9 @@ function OfferComparison({
                     <button
                       onClick={() => acceptOffer(item)}
                       className="rounded-md bg-slate-950 px-3 py-1.5 text-xs font-medium text-white disabled:bg-slate-300"
-                      disabled={item.status === "รอผลการเจรจา"}
+                      disabled={item.status === "ถูกเลือก" || item.status === "ไม่ถูกเลือก"}
                     >
-                      {item.status === "กำลังเจรจาก่อนออก PO/SO" ? "เปิดแชทเจรจา" : "เจรจาก่อนออก PO/SO"}
+                      เลือกข้อเสนอนี้
                     </button>
                   </td>
                 </tr>
