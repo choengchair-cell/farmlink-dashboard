@@ -645,6 +645,7 @@ const initialChatMessages: ChatMessage[] = [
 
 const CHAT_THREADS_STORAGE_KEY = "farmlink_chat_threads";
 const CHAT_MESSAGES_STORAGE_KEY = "farmlink_chat_messages";
+const PRODUCTS_STORAGE_KEY = "farmlink_products";
 const REQUESTS_STORAGE_KEY = "farmlink_purchase_requests";
 const OFFERS_STORAGE_KEY = "farmlink_offers";
 const ORDERS_STORAGE_KEY = "farmlink_orders";
@@ -673,6 +674,46 @@ function saveStoredArray<T>(key: string, value: T[]) {
   } catch {
     // Ignore storage failures in demo mode.
   }
+}
+
+function fileToDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function imageFileToStoredDataUrl(file: File) {
+  const originalDataUrl = await fileToDataUrl(file);
+
+  return new Promise<string>((resolve) => {
+    const image = new Image();
+
+    image.onload = () => {
+      const maxSize = 1200;
+      const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+      const width = Math.max(1, Math.round(image.width * scale));
+      const height = Math.max(1, Math.round(image.height * scale));
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+
+      if (!context) {
+        resolve(originalDataUrl);
+        return;
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      context.drawImage(image, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", 0.82) || originalDataUrl);
+    };
+
+    image.onerror = () => resolve(originalDataUrl);
+    image.src = originalDataUrl;
+  });
 }
 
 const initialRisks: RiskAlert[] = [
@@ -1796,7 +1837,7 @@ function App() {
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("ทั้งหมด");
 
-  const [products, setProducts] = useState<PublicProduct[]>(initialProducts);
+  const [products, setProducts] = useState<PublicProduct[]>(() => loadStoredArray<PublicProduct>(PRODUCTS_STORAGE_KEY, initialProducts));
   const [requests, setRequests] = useState<PurchaseRequest[]>(() => loadStoredArray<PurchaseRequest>(REQUESTS_STORAGE_KEY, initialRequests));
   const [offers, setOffers] = useState<Offer[]>(() => loadStoredArray<Offer>(OFFERS_STORAGE_KEY, initialOffers));
   const [orders, setOrders] = useState<Order[]>(() => loadStoredArray<Order>(ORDERS_STORAGE_KEY, initialOrders));
@@ -1808,6 +1849,10 @@ function App() {
   const [risks] = useState<RiskAlert[]>(initialRisks);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(initialAuditLogs);
   const [toast, setToast] = useState("พร้อม demo workflow: ผู้ซื้อ -> ผู้ขาย -> ผู้ดูแลระบบ");
+
+  useEffect(() => {
+    saveStoredArray(PRODUCTS_STORAGE_KEY, products);
+  }, [products]);
 
   useEffect(() => {
     saveStoredArray(CHAT_THREADS_STORAGE_KEY, chatThreads);
@@ -1839,6 +1884,7 @@ function App() {
 
   useEffect(() => {
     const reloadChatStateFromStorage = () => {
+      setProducts(loadStoredArray<PublicProduct>(PRODUCTS_STORAGE_KEY, initialProducts));
       setChatThreads(loadStoredArray<ChatThread>(CHAT_THREADS_STORAGE_KEY, initialChatThreads));
       setChatMessages(loadStoredArray<ChatMessage>(CHAT_MESSAGES_STORAGE_KEY, initialChatMessages));
       setRequests(loadStoredArray<PurchaseRequest>(REQUESTS_STORAGE_KEY, initialRequests));
@@ -1850,6 +1896,7 @@ function App() {
 
     const handleStorageSync = (event: StorageEvent) => {
       if (
+        event.key === PRODUCTS_STORAGE_KEY ||
         event.key === CHAT_THREADS_STORAGE_KEY ||
         event.key === CHAT_MESSAGES_STORAGE_KEY ||
         event.key === REQUESTS_STORAGE_KEY ||
@@ -3135,7 +3182,7 @@ function PublicCatalog({
       <section className="mx-auto max-w-7xl px-5 pb-10 pt-6">
         <div className="mx-auto max-w-4xl text-center">
           <p className="text-lg font-medium leading-relaxed text-[#4B6B5C]">
-            ระบบจัดซอร์สสินค้าเกษตร B2B ตรวจสอบได้ — ค้นหา เปรียบเทียบ และส่งขอจากผู้ผลิตโดยตรง
+            ระบบจัดซื้อสินค้าเกษตร B2B ตรวจสอบได้ — ค้นหา เปรียบเทียบ และส่งคำขอซื้อจากผู้ผลิตโดยตรง
           </p>
         </div>
 
@@ -4750,7 +4797,7 @@ function AddProductModal({
     setForm((current) => ({ ...current, [key]: value }));
   };
 
-  const handleFile = (event: ChangeEvent<HTMLInputElement>) => {
+  const handleFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
 
     if (!file) return;
@@ -4767,7 +4814,8 @@ function AddProductModal({
       return;
     }
 
-    update("imageUrl", URL.createObjectURL(file));
+    const storedImageUrl = await imageFileToStoredDataUrl(file);
+    update("imageUrl", storedImageUrl);
   };
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -5693,7 +5741,7 @@ function ManageImageModal({
 }) {
   const [imageUrl, setImageUrl] = useState(product.imageUrl || "");
 
-  const handleFile = (event: ChangeEvent<HTMLInputElement>) => {
+  const handleFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
 
     if (!file) return;
@@ -5710,7 +5758,8 @@ function ManageImageModal({
       return;
     }
 
-    setImageUrl(URL.createObjectURL(file));
+    const storedImageUrl = await imageFileToStoredDataUrl(file);
+    setImageUrl(storedImageUrl);
   };
 
   return (
