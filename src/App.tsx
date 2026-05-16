@@ -1876,6 +1876,7 @@ function App() {
   const role = currentUser?.role ?? null;
 
   const [isAdminSession, setIsAdminSession] = useState(false);
+  const [publicPreviewMode, setPublicPreviewMode] = useState(false);
   const [activeMenu, setActiveMenu] = useState("แดชบอร์ด");
   const [loginMode, setLoginMode] = useState<LoginMode | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -2040,6 +2041,7 @@ function App() {
     value
       ?.trim()
       .toLowerCase()
+      .replace(/\s+/g, "")
       .replace("seller_demo01", "seller_demo_01")
       .replace("seller_demo02", "seller_demo_02")
       .replace("seller_demo03", "seller_demo_03")
@@ -2062,8 +2064,13 @@ function App() {
 
     let nextUser: User | undefined;
 
-    if (normalizedUsername === "useradmin") {
-      if (normalizedPassword !== "admin123") {
+    const isAdminUsername = normalizedUsername === "useradmin" || normalizedUsername === "admin";
+    const isAdminPassword = normalizedPassword === "admin123" || normalizedPassword === "admin";
+
+    if (!normalizedUsername && adminSession) {
+      nextUser = allUsers.find((user) => user.role === _nextRole);
+    } else if (isAdminUsername) {
+      if (!isAdminPassword) {
         window.alert("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");
         return;
       }
@@ -2085,6 +2092,7 @@ function App() {
 
     setCurrentUser(nextUser);
     setIsAdminSession(adminSession || nextUser.role === "admin");
+    setPublicPreviewMode(false);
     setLoginMode(null);
     setActiveMenu(nextUser.role === "admin" ? "ภาพรวมระบบ" : "แดชบอร์ด");
     setToast(`เข้าสู่ระบบเป็น ${nextUser.displayName}`);
@@ -2118,6 +2126,7 @@ function App() {
     setRegisteredUsers((current) => [newUser, ...current]);
     setCurrentUser(newUser);
     setIsAdminSession(false);
+    setPublicPreviewMode(false);
     setLoginMode(null);
     setActiveMenu("แดชบอร์ด");
     setToast(
@@ -2130,8 +2139,30 @@ function App() {
   const logout = () => {
     setCurrentUser(null);
     setIsAdminSession(false);
+    setPublicPreviewMode(false);
     setLoginMode(null);
     setActiveMenu("แดชบอร์ด");
+  };
+
+  const openPublicPreviewFromLogo = () => {
+    if (isAdminSession) {
+      setPublicPreviewMode(true);
+      setToast("กำลังดูหน้าแรกแบบบุคคลทั่วไป โดยยังคงสิทธิ์ผู้ดูแลระบบไว้");
+      return;
+    }
+
+    setActiveMenu("แดชบอร์ด");
+  };
+
+  const returnToAdminDashboard = () => {
+    const adminUser = allUsers.find((user) => user.role === "admin");
+    if (adminUser) {
+      setCurrentUser(adminUser);
+    }
+    setIsAdminSession(true);
+    setPublicPreviewMode(false);
+    setActiveMenu("ภาพรวมระบบ");
+    setToast("กลับสู่หน้าผู้ดูแลระบบแล้ว");
   };
 
   const getOrCreateChatThread = ({
@@ -2973,6 +3004,33 @@ function App() {
     setToast(`ลบสินค้า "${targetProduct.productName}" แล้ว`);
   };
 
+  if (publicPreviewMode && isAdminSession && currentUser) {
+    return (
+      <PublicCatalog
+        products={filteredPublicProducts}
+        announcement={publicAnnouncement}
+        searchTerm={searchTerm}
+        categoryFilter={categoryFilter}
+        loginMode={loginMode}
+        onSearchChange={setSearchTerm}
+        onCategoryChange={setCategoryFilter}
+        onLoginModeChange={setLoginMode}
+        onLogin={(nextRole, _adminSession, username, password) =>
+          chooseRole(nextRole, true, username, password)
+        }
+        onRegister={registerMember}
+        adminPreview={{
+          adminName: currentUser.displayName,
+          onBackToAdmin: returnToAdminDashboard,
+          onEditAnnouncement: () => {
+            returnToAdminDashboard();
+            setActiveMenu("ภาพรวมระบบ");
+          },
+        }}
+      />
+    );
+  }
+
   if (!currentUser || !role) {
     return (
       <PublicCatalog
@@ -3014,7 +3072,7 @@ function App() {
   return (
     <div className="min-h-screen bg-[#F3F7F5] text-slate-900">
       <aside className="fixed inset-y-0 left-0 hidden w-72 overflow-y-auto bg-[#064E3B] px-5 py-6 text-white lg:block shadow-[8px_0_28px_rgba(6,78,59,0.18)]">
-        <button onClick={logout} className="text-left">
+        <button onClick={openPublicPreviewFromLogo} className="text-left">
           <p className="text-2xl font-bold">FarmLink</p>
           <p className="text-sm text-emerald-100">ฟาร์มลิงก์</p>
           <p className="mt-2 inline-flex rounded-full border border-white/15 bg-white/10 px-2.5 py-1 text-[11px] font-medium text-emerald-50">
@@ -3154,6 +3212,7 @@ function PublicCatalog({
   onLoginModeChange,
   onLogin,
   onRegister,
+  adminPreview,
 }: {
   products: PublicProduct[];
   announcement: PublicAnnouncement;
@@ -3165,6 +3224,11 @@ function PublicCatalog({
   onLoginModeChange: (value: LoginMode | null) => void;
   onLogin: (role: Role, adminSession?: boolean, username?: string, password?: string) => void;
   onRegister: (input: RegistrationInput) => void;
+  adminPreview?: {
+    adminName: string;
+    onBackToAdmin: () => void;
+    onEditAnnouncement: () => void;
+  };
 }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -3185,7 +3249,11 @@ function PublicCatalog({
       ? "เลือกประเภทสมาชิก กรอกข้อมูลพื้นฐาน แล้วเริ่มใช้งาน prototype ได้ทันที"
       : "กรอกชื่อผู้ใช้และรหัสผ่าน ระบบจะพาไปยังหน้าที่ตรงกับบัญชีของคุณโดยอัตโนมัติ";
 
-  const isHiddenAdminLogin = username.trim().toLowerCase() === "useradmin" && password === "admin123";
+  const normalizedLoginUsername = username.trim().toLowerCase().replace(/\s+/g, "");
+  const normalizedLoginPassword = password.trim();
+  const isHiddenAdminLogin =
+    (normalizedLoginUsername === "useradmin" || normalizedLoginUsername === "admin") &&
+    (normalizedLoginPassword === "admin123" || normalizedLoginPassword === "admin");
 
   const loginRole: Role = "buyer";
 
@@ -3227,6 +3295,32 @@ function PublicCatalog({
 
   return (
     <main className="min-h-screen bg-[#FAFBF8] text-slate-900">
+      {adminPreview ? (
+        <div className="border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-900">
+          <div className="mx-auto flex max-w-7xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p>
+              <span className="font-bold">โหมดผู้ดูแลระบบ:</span> {adminPreview.adminName} กำลังดูหน้าแรกเหมือนบุคคลทั่วไป
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={adminPreview.onEditAnnouncement}
+                className="rounded-md bg-[#0F8A5F] px-3 py-2 text-xs font-bold text-white"
+              >
+                แก้ประกาศหน้าแรก
+              </button>
+              <button
+                type="button"
+                onClick={adminPreview.onBackToAdmin}
+                className="rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-900"
+              >
+                กลับผู้ดูแลระบบ
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <header className="sticky top-0 z-20 border-b border-[#E4EDE7] bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-5">
           <button onClick={() => onCategoryChange("ทั้งหมด")} className="flex items-center gap-3 text-left">
