@@ -2024,6 +2024,56 @@ function App() {
     ]);
   };
 
+  const persistPublicAnnouncementImmediately = (announcementValue: PublicAnnouncement) => {
+    if (typeof window === "undefined") return true;
+
+    try {
+      window.localStorage.setItem(
+        PUBLIC_ANNOUNCEMENT_STORAGE_KEY,
+        JSON.stringify(announcementValue)
+      );
+      return true;
+    } catch {
+      // localStorage ของ browser อาจเต็มได้ โดยเฉพาะเมื่อเคยบันทึกรูปสินค้าเป็น base64
+      // ให้ลดขนาด cache ของสินค้าโดยตัดเฉพาะรูป data URL ออก แล้วลองบันทึกประกาศอีกครั้ง
+      try {
+        const storedProducts = window.localStorage.getItem(PRODUCTS_STORAGE_KEY);
+
+        if (storedProducts) {
+          const parsedProducts = JSON.parse(storedProducts);
+
+          if (Array.isArray(parsedProducts)) {
+            const compactProducts = parsedProducts.map((product) => {
+              if (
+                product &&
+                typeof product === "object" &&
+                typeof product.imageUrl === "string" &&
+                product.imageUrl.startsWith("data:")
+              ) {
+                return {
+                  ...product,
+                  imageUrl: "",
+                };
+              }
+
+              return product;
+            });
+
+            window.localStorage.setItem(PRODUCTS_STORAGE_KEY, JSON.stringify(compactProducts));
+          }
+        }
+
+        window.localStorage.setItem(
+          PUBLIC_ANNOUNCEMENT_STORAGE_KEY,
+          JSON.stringify(announcementValue)
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  };
+
   const updatePublicAnnouncement = (nextAnnouncement: PublicAnnouncement) => {
     const updatedAnnouncement: PublicAnnouncement = {
       ...nextAnnouncement,
@@ -2032,9 +2082,16 @@ function App() {
       updatedAt: new Date().toISOString(),
     };
 
+    const persisted = persistPublicAnnouncementImmediately(updatedAnnouncement);
+
     setPublicAnnouncement(updatedAnnouncement);
     addAudit("แก้ไขประกาศหน้าแรก", updatedAnnouncement.badge, "ผู้ดูแลระบบ");
-    setToast("อัปเดตประกาศหน้าแรกแล้ว");
+
+    if (persisted) {
+      setToast("อัปเดตและบันทึกประกาศหน้าแรกแล้ว");
+    } else {
+      setToast("อัปเดตประกาศในหน้านี้แล้ว แต่ browser storage เต็ม กรุณาล้าง cache หรือรีเซ็ตข้อมูล demo ก่อนรีเฟรชหน้า");
+    }
   };
 
   const normalizeLoginUsername = (value?: string) =>
@@ -4786,12 +4843,14 @@ function AdminAnnouncementSettings({
   onSave: (announcement: PublicAnnouncement) => void;
 }) {
   const [form, setForm] = useState<PublicAnnouncement>(announcement);
+  const [saveState, setSaveState] = useState<"idle" | "saved">("idle");
 
   useEffect(() => {
     setForm(announcement);
   }, [announcement]);
 
   const update = <K extends keyof PublicAnnouncement>(key: K, value: PublicAnnouncement[K]) => {
+    setSaveState("idle");
     setForm((current) => ({ ...current, [key]: value }));
   };
 
@@ -4803,7 +4862,16 @@ function AdminAnnouncementSettings({
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    onSave(form);
+
+    const nextAnnouncement: PublicAnnouncement = {
+      ...form,
+      badge: form.badge.trim(),
+      message: form.message.trim(),
+    };
+
+    onSave(nextAnnouncement);
+    setForm(nextAnnouncement);
+    setSaveState("saved");
   };
 
   return (
@@ -4866,7 +4934,12 @@ function AdminAnnouncementSettings({
           <p className="mt-1 text-base text-slate-700">{form.message || defaultPublicAnnouncement.message}</p>
         </div>
 
-        <div className="flex justify-end">
+        <div className="flex flex-col items-end gap-2">
+          {saveState === "saved" ? (
+            <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">
+              บันทึกการเปลี่ยนแปลงแล้ว
+            </p>
+          ) : null}
           <button type="submit" className="rounded-md bg-[#0F8A5F] px-4 py-2 text-sm font-medium text-white">
             บันทึกประกาศหน้าแรก
           </button>
