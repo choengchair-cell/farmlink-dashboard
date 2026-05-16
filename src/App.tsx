@@ -723,7 +723,7 @@ function fileToDataUrl(file: File) {
   });
 }
 
-async function imageFileToStoredDataUrl(file: File) {
+async function imageFileToLocalDataUrl(file: File) {
   const originalDataUrl = await fileToDataUrl(file);
 
   return new Promise<string>((resolve) => {
@@ -751,6 +751,58 @@ async function imageFileToStoredDataUrl(file: File) {
     image.onerror = () => resolve(originalDataUrl);
     image.src = originalDataUrl;
   });
+}
+
+function getCloudinaryConfig() {
+  return {
+    cloudName: import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || "",
+    uploadPreset: import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || "",
+    folder: import.meta.env.VITE_CLOUDINARY_FOLDER || "farmlink",
+  };
+}
+
+async function uploadImageToCloudinary(file: File) {
+  const { cloudName, uploadPreset, folder } = getCloudinaryConfig();
+
+  if (!cloudName || !uploadPreset) {
+    throw new Error(
+      "ยังไม่ได้ตั้งค่า Cloudinary กรุณาเพิ่ม VITE_CLOUDINARY_CLOUD_NAME และ VITE_CLOUDINARY_UPLOAD_PRESET"
+    );
+  }
+
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("upload_preset", uploadPreset);
+  formData.append("folder", folder);
+
+  const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+    method: "POST",
+    body: formData,
+  });
+
+  const result = await response.json().catch(() => null);
+
+  if (!response.ok || !result?.secure_url) {
+    const message = result?.error?.message || "อัปโหลดรูปไป Cloudinary ไม่สำเร็จ";
+    throw new Error(message);
+  }
+
+  return String(result.secure_url);
+}
+
+async function imageFileToStoredDataUrl(file: File) {
+  try {
+    return await uploadImageToCloudinary(file);
+  } catch (error) {
+    console.error(error);
+    alert(
+      error instanceof Error
+        ? error.message
+        : "อัปโหลดรูปไป Cloudinary ไม่สำเร็จ ระบบจะเก็บรูปไว้เฉพาะเครื่องนี้แทน"
+    );
+
+    return imageFileToLocalDataUrl(file);
+  }
 }
 
 const defaultPublicAnnouncement: PublicAnnouncement = {
@@ -2030,56 +2082,6 @@ function App() {
     ]);
   };
 
-  const persistPublicAnnouncementImmediately = (announcementValue: PublicAnnouncement) => {
-    if (typeof window === "undefined") return true;
-
-    try {
-      window.localStorage.setItem(
-        PUBLIC_ANNOUNCEMENT_STORAGE_KEY,
-        JSON.stringify(announcementValue)
-      );
-      return true;
-    } catch {
-      // localStorage ของ browser อาจเต็มได้ โดยเฉพาะเมื่อเคยบันทึกรูปสินค้าเป็น base64
-      // ให้ลดขนาด cache ของสินค้าโดยตัดเฉพาะรูป data URL ออก แล้วลองบันทึกประกาศอีกครั้ง
-      try {
-        const storedProducts = window.localStorage.getItem(PRODUCTS_STORAGE_KEY);
-
-        if (storedProducts) {
-          const parsedProducts = JSON.parse(storedProducts);
-
-          if (Array.isArray(parsedProducts)) {
-            const compactProducts = parsedProducts.map((product) => {
-              if (
-                product &&
-                typeof product === "object" &&
-                typeof product.imageUrl === "string" &&
-                product.imageUrl.startsWith("data:")
-              ) {
-                return {
-                  ...product,
-                  imageUrl: "",
-                };
-              }
-
-              return product;
-            });
-
-            window.localStorage.setItem(PRODUCTS_STORAGE_KEY, JSON.stringify(compactProducts));
-          }
-        }
-
-        window.localStorage.setItem(
-          PUBLIC_ANNOUNCEMENT_STORAGE_KEY,
-          JSON.stringify(announcementValue)
-        );
-        return true;
-      } catch {
-        return false;
-      }
-    }
-  };
-
   const updatePublicAnnouncement = (nextAnnouncement: PublicAnnouncement) => {
     const updatedAnnouncement: PublicAnnouncement = {
       ...nextAnnouncement,
@@ -2088,16 +2090,9 @@ function App() {
       updatedAt: new Date().toISOString(),
     };
 
-    const persisted = persistPublicAnnouncementImmediately(updatedAnnouncement);
-
     setPublicAnnouncement(updatedAnnouncement);
     addAudit("แก้ไขประกาศหน้าแรก", updatedAnnouncement.badge, "ผู้ดูแลระบบ");
-
-    if (persisted) {
-      setToast("อัปเดตและบันทึกประกาศหน้าแรกแล้ว");
-    } else {
-      setToast("อัปเดตประกาศในหน้านี้แล้ว แต่ browser storage เต็ม กรุณาล้าง cache หรือรีเซ็ตข้อมูล demo ก่อนรีเฟรชหน้า");
-    }
+    setToast("อัปเดตประกาศหน้าแรกแล้ว");
   };
 
   const normalizeLoginUsername = (value?: string) =>
@@ -4849,14 +4844,12 @@ function AdminAnnouncementSettings({
   onSave: (announcement: PublicAnnouncement) => void;
 }) {
   const [form, setForm] = useState<PublicAnnouncement>(announcement);
-  const [saveState, setSaveState] = useState<"idle" | "saved">("idle");
 
   useEffect(() => {
     setForm(announcement);
   }, [announcement]);
 
   const update = <K extends keyof PublicAnnouncement>(key: K, value: PublicAnnouncement[K]) => {
-    setSaveState("idle");
     setForm((current) => ({ ...current, [key]: value }));
   };
 
@@ -4868,16 +4861,7 @@ function AdminAnnouncementSettings({
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-
-    const nextAnnouncement: PublicAnnouncement = {
-      ...form,
-      badge: form.badge.trim(),
-      message: form.message.trim(),
-    };
-
-    onSave(nextAnnouncement);
-    setForm(nextAnnouncement);
-    setSaveState("saved");
+    onSave(form);
   };
 
   return (
@@ -4940,12 +4924,7 @@ function AdminAnnouncementSettings({
           <p className="mt-1 text-base text-slate-700">{form.message || defaultPublicAnnouncement.message}</p>
         </div>
 
-        <div className="flex flex-col items-end gap-2">
-          {saveState === "saved" ? (
-            <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">
-              บันทึกการเปลี่ยนแปลงแล้ว
-            </p>
-          ) : null}
+        <div className="flex justify-end">
           <button type="submit" className="rounded-md bg-[#0F8A5F] px-4 py-2 text-sm font-medium text-white">
             บันทึกประกาศหน้าแรก
           </button>
